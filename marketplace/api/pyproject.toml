@@ -13,11 +13,16 @@ authors = [{ name = "PagerOS maintainers" }]
 dependencies = [
   "pydantic>=2.5,<3",
   "pyyaml>=6.0,<7",
+  "fastapi>=0.110,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=7.4",
+  "httpx>=0.27,<1",
+]
+serve = [
+  "uvicorn[standard]>=0.27,<1",
 ]
 
 [project.scripts]
