@@ -15,9 +15,20 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "pageros_gps.h"
 #include "selftest.h"
 
 static const char *TAG = "pageros";
+
+static void on_gps_fix(const pageros_gps_fix_t *fix, void *user_ctx)
+{
+    (void)user_ctx;
+    ESP_LOGI("gps",
+             "fix: lat=%.6f lon=%.6f acc=%.1fm sats=%u utc_ms=%llu",
+             fix->latitude_deg, fix->longitude_deg,
+             (double)fix->accuracy_m, (unsigned)fix->satellites,
+             (unsigned long long)fix->utc_epoch_ms);
+}
 
 void app_main(void)
 {
@@ -42,6 +53,18 @@ void app_main(void)
     selftest_result_t st = selftest_run();
     selftest_log_result(&st);
     selftest_halt_if_hard_fail(&st);
+
+    // GPS bring-up (FW-011). Soft-fails: if the receiver isn't present
+    // or the I2C expander mis-detects, log and continue so the rest of
+    // the device still boots. Foreground apps that need location query
+    // pageros_gps_get_last_fix(); subscribed apps can register their own
+    // callback via pageros_gps_set_fix_callback().
+    esp_err_t gps_err = pageros_gps_init();
+    if (gps_err == ESP_OK) {
+        pageros_gps_set_fix_callback(on_gps_fix, NULL);
+    } else {
+        ESP_LOGW(TAG, "GPS init skipped: %s", esp_err_to_name(gps_err));
+    }
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(60000));
