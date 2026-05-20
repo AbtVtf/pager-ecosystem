@@ -1,0 +1,26 @@
+# PagerOS partition layout for ESP32-S3 N16R8 (16 MB flash).
+#
+# Implements SPEC §13.2: A/B firmware slots with rollback + recovery image.
+# The inactive OTA slot doubles as the OTA download staging area (standard ESP-IDF flow).
+#
+# Layout (16 MB total):
+#   bootloader        0x00000  -  64 KB  (implicit, before partition table)
+#   partition table   0x08000  -   4 KB  (implicit)
+#   nvs               0x09000  -  24 KB  identity keypair, settings, NVS-backed state
+#   otadata           0x0F000  -   8 KB  active-slot pointer + rollback bits
+#   phy_init          0x11000  -   4 KB  RF calibration
+#   factory (recovery) 0x20000 - 1.5 MB  unbrickable recovery image (boot fallback)
+#   ota_0 (slot A)   0x1A0000  -   5 MB  application slot A
+#   ota_1 (slot B)   0x6A0000  -   5 MB  application slot B (also OTA staging)
+#   fonts            0xBA0000  - 1.5 MB  bundled Noto subsets (§7.7)
+#   storage          0xD20000  - 2.875 MB SD-mirror / cache / logs (§7.4)
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+otadata,    data, ota,      0xf000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+factory,    app,  factory,  0x20000,  0x180000,
+ota_0,      app,  ota_0,    0x1a0000, 0x500000,
+ota_1,      app,  ota_1,    0x6a0000, 0x500000,
+fonts,      data, spiffs,   0xba0000, 0x180000,
+storage,    data, spiffs,   0xd20000, 0x2e0000,
