@@ -20,6 +20,9 @@ CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# FW-002: don't panic at PSRAM init — let bootloader self-test detect and
+# hard-fail with a structured log, per SPEC §7.2 boot flow.
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 
 # --- Partition table (custom, see partitions.csv) ---
 CONFIG_PARTITION_TABLE_CUSTOM=y

@@ -1,7 +1,9 @@
 // PagerOS firmware entry point.
 //
-// Skeleton only (FW-001). Subsequent tasks (FW-002 bootloader self-test, FW-003
-// filesystem mount, etc.) bolt their initialization in here in dependency order.
+// Skeleton (FW-001) + bootloader self-test (FW-002). Subsequent tasks
+// (FW-003 filesystem mount, FW-005 display driver, etc.) bolt their
+// initialization in here in dependency order. The self-test must run
+// first per SPEC.md §7.2 boot flow.
 
 #include <stdio.h>
 
@@ -12,6 +14,8 @@
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "selftest.h"
 
 static const char *TAG = "pageros";
 
@@ -33,6 +37,11 @@ void app_main(void)
              running ? running->label : "?",
              running ? (unsigned long)running->address : 0UL,
              running ? (unsigned long)(running->size / 1024) : 0UL);
+
+    // Boot self-test — see SPEC.md §7.2 step 2 / TASKS.md FW-002.
+    selftest_result_t st = selftest_run();
+    selftest_log_result(&st);
+    selftest_halt_if_hard_fail(&st);
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(60000));
