@@ -16,9 +16,33 @@
 #include "freertos/task.h"
 
 #include "pageros_gps.h"
+#include "pageros_input.h"
 #include "selftest.h"
 
 static const char *TAG = "pageros";
+
+static const char *input_event_name(pageros_input_event_t e)
+{
+    switch (e) {
+        case PAGEROS_INPUT_ROTARY_CW:  return "ROTARY_CW";
+        case PAGEROS_INPUT_ROTARY_CCW: return "ROTARY_CCW";
+        case PAGEROS_INPUT_ENTER:      return "ENTER";
+        case PAGEROS_INPUT_BACK:       return "BACK";
+        case PAGEROS_INPUT_BACK_LONG:  return "BACK_LONG";
+        default:                       return "?";
+    }
+}
+
+static void input_log_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        pageros_input_event_t e = pageros_input_wait(portMAX_DELAY);
+        if (e != PAGEROS_INPUT_NONE) {
+            ESP_LOGI("input", "event: %s", input_event_name(e));
+        }
+    }
+}
 
 static void on_gps_fix(const pageros_gps_fix_t *fix, void *user_ctx)
 {
@@ -64,6 +88,16 @@ void app_main(void)
         pageros_gps_set_fix_callback(on_gps_fix, NULL);
     } else {
         ESP_LOGW(TAG, "GPS init skipped: %s", esp_err_to_name(gps_err));
+    }
+
+    // Input bring-up (FW-007). Spawns a tiny logger task so the user can
+    // see encoder + ENTER + BACK events on the USB monitor; the real
+    // input router (FW-024) will replace this with proper dispatch.
+    esp_err_t input_err = pageros_input_init();
+    if (input_err == ESP_OK) {
+        xTaskCreate(input_log_task, "input_log", 2048, NULL, 4, NULL);
+    } else {
+        ESP_LOGW(TAG, "input init skipped: %s", esp_err_to_name(input_err));
     }
 
     while (1) {

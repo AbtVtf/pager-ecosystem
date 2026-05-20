@@ -4,6 +4,7 @@ idf_component_register(
     REQUIRES
         selftest
         gps
+        input
         app_update
         esp_hw_support
         spi_flash
