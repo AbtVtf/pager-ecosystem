@@ -1,4 +1,4 @@
-"""FastAPI app factory for the marketplace registry (MKT-002 + MKT-003 + MKT-006)."""
+"""FastAPI app factory for the marketplace registry (MKT-002 + MKT-003 + MKT-006 + MKT-008)."""
 
 from __future__ import annotations
 
@@ -115,9 +115,11 @@ def create_app(
         summary="Registry REST API for PagerOS apps (SPEC §10).",
         description=(
             "Implements MKT-002 (registry CRUD + search), MKT-003 (DNS TXT "
-            "publish-time challenge), and MKT-006 (moderation queue + admin "
-            "tooling). The admin surface lives under `/admin` and is gated by "
-            "an admin bearer token."
+            "publish-time challenge), MKT-006 (moderation queue + admin "
+            "tooling), and MKT-008 (public moderation log). The admin "
+            "surface lives under `/admin` and is gated by an admin bearer "
+            "token; the public moderation log at `GET /moderation/log` "
+            "mirrors the admin action log read-only with no auth."
         ),
     )
     app.state.registry = registry
@@ -733,6 +735,50 @@ def _register_routes(app: FastAPI) -> None:
         )
         return AppRecord.from_entry(entry)
 
+    # --- public: moderation log (MKT-008) ----------------------------------- #
+
+    @app.get(
+        "/moderation/log",
+        tags=["moderation"],
+        response_model=Page[LogRecord],
+        summary="Public moderation log (MKT-008)",
+        description=(
+            "Append-only, read-only public feed of policy decisions: app "
+            "registrations are reviewed via reports, admins add/remove trust "
+            "tags or delete apps, and reports are resolved or dismissed. "
+            "Every such action is recorded as an entry here, newest first. "
+            "No authentication required. Entries are stable: an entry is "
+            "never modified or removed after it is appended. Per SPEC §10, "
+            "this is the canonical public record of marketplace moderation."
+        ),
+    )
+    def public_moderation_log(
+        app_id: str | None = Query(
+            None,
+            description="Filter entries to a single app id.",
+        ),
+        action: str | None = Query(
+            None,
+            description=(
+                "Filter to a single action key (e.g. `app.delete`, "
+                "`app.tag.add`, `app.tag.remove`, `app.tags.set`, "
+                "`report.file`, `report.resolve`, `report.dismiss`)."
+            ),
+        ),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=500),
+        moderation: ModerationStore = Depends(_get_moderation),
+    ) -> Page[LogRecord]:
+        entries, total = moderation.list_log(
+            app_id=app_id, action=action, offset=offset, limit=limit
+        )
+        return Page[LogRecord](
+            items=[LogRecord.from_entry(e) for e in entries],
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
+
     # --- admin: action log -------------------------------------------------- #
 
     @app.get(
@@ -742,8 +788,9 @@ def _register_routes(app: FastAPI) -> None:
         responses={401: _ERROR_RESPONSES[401]},
         summary="Read the moderation action log (admin)",
         description=(
-            "Append-only log of admin actions and report events. MKT-008 will "
-            "publish this read-only at `GET /moderation/log`."
+            "Append-only log of admin actions and report events. The same "
+            "entries are also exposed unauthenticated at "
+            "`GET /moderation/log` (MKT-008)."
         ),
     )
     def admin_list_log(

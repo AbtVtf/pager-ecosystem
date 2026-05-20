@@ -387,3 +387,98 @@ def test_openapi_lists_moderation_endpoints(open_client: TestClient):
     assert "/admin/apps/{app_id}/tags" in paths
     assert "/admin/apps/{app_id}/tags/{tag}" in paths
     assert "/admin/log" in paths
+    assert "/moderation/log" in paths
+
+
+# --- public moderation log (MKT-008) -------------------------------------- #
+
+
+def test_public_moderation_log_records_admin_actions(open_client: TestClient):
+    _seed_app(open_client)
+    # An admin tags, untags, and removes the app.
+    open_client.post(f"/admin/apps/{APP_ID}/tags/verified").raise_for_status()
+    open_client.delete(f"/admin/apps/{APP_ID}/tags/verified").raise_for_status()
+    open_client.delete(f"/apps/{APP_ID}").raise_for_status()
+
+    r = open_client.get("/moderation/log")
+    assert r.status_code == 200
+    body = r.json()
+    actions = [e["action"] for e in body["items"]]
+    # Accept, tag, and remove are all visible publicly.
+    assert "app.tag.add" in actions
+    assert "app.tag.remove" in actions
+    assert "app.delete" in actions
+    assert body["total"] == len(body["items"])
+    # Newest-first ordering: the delete is the last action taken.
+    assert body["items"][0]["action"] == "app.delete"
+
+
+def test_public_moderation_log_is_unauthenticated(gated_client: TestClient):
+    """Even when the admin surface is gated, the public log is open."""
+    _seed_app_gated(gated_client)
+    gated_client.post(
+        f"/admin/apps/{APP_ID}/tags/verified", headers=_auth()
+    ).raise_for_status()
+
+    # No Authorization header — the public log must still respond 200.
+    r = gated_client.get("/moderation/log")
+    assert r.status_code == 200
+    actions = [e["action"] for e in r.json()["items"]]
+    assert "app.tag.add" in actions
+
+    # And the gated admin log still requires auth.
+    assert gated_client.get("/admin/log").status_code == 401
+
+
+def test_public_moderation_log_does_not_expose_reporter_identity(
+    open_client: TestClient,
+):
+    """File-report log entries must not leak reporter_contact into the public feed."""
+    _seed_app(open_client)
+    open_client.post(
+        "/reports",
+        json={
+            "app_id": APP_ID,
+            "reason": "spammy",
+            "reporter_contact": "private-tipster@example.com",
+        },
+    ).raise_for_status()
+
+    body = open_client.get("/moderation/log").json()
+    file_entries = [e for e in body["items"] if e["action"] == "report.file"]
+    assert file_entries, "expected a report.file entry"
+    blob = repr(file_entries)
+    assert "private-tipster@example.com" not in blob
+
+
+def test_public_moderation_log_paginates_and_filters(open_client: TestClient):
+    _seed_app(open_client)
+    open_client.post(f"/admin/apps/{APP_ID}/tags/verified").raise_for_status()
+    open_client.post(f"/admin/apps/{APP_ID}/tags/featured").raise_for_status()
+    open_client.delete(f"/admin/apps/{APP_ID}/tags/verified").raise_for_status()
+
+    # Pagination: limit caps items and total counts everything that matches.
+    page = open_client.get("/moderation/log?limit=2").json()
+    assert page["total"] == 3
+    assert len(page["items"]) == 2
+
+    # Filter by action.
+    only_adds = open_client.get("/moderation/log?action=app.tag.add").json()
+    assert only_adds["total"] == 2
+    assert all(e["action"] == "app.tag.add" for e in only_adds["items"])
+
+    # Filter by app_id matches all entries.
+    by_app = open_client.get(f"/moderation/log?app_id={APP_ID}").json()
+    assert by_app["total"] == 3
+
+    # Unknown app filter yields an empty page.
+    unknown = open_client.get("/moderation/log?app_id=ghost.example.dev").json()
+    assert unknown["total"] == 0
+    assert unknown["items"] == []
+
+
+def test_public_moderation_log_is_read_only(open_client: TestClient):
+    """The public log endpoint does not accept mutating verbs."""
+    for method in ("post", "put", "patch", "delete"):
+        r = getattr(open_client, method)("/moderation/log")
+        assert r.status_code in {404, 405}, (method, r.status_code)

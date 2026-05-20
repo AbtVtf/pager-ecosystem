@@ -106,6 +106,7 @@ Open registration plus post-hoc moderation per SPEC §10.5. Any user may
 | `DELETE` | `/admin/apps/{app_id}/tags/{tag}` | admin | Remove one trust tag (idempotent). |
 | `DELETE` | `/apps/{app_id}` | admin | Remove an app (logged to the moderation log). |
 | `GET` | `/admin/log` | admin | Append-only moderation action log. |
+| `GET` | `/moderation/log` | none | Public read-only moderation log (MKT-008). |
 | `GET` | `/admin/ui` | admin | Server-rendered moderation dashboard (HTML). |
 
 Trust tags are an exclusive allowlist (SPEC §10.5): `verified`, `featured`,
@@ -118,8 +119,12 @@ default), the admin surface is unauthenticated — useful for tests and local
 development but **must** be set in production.
 
 Every admin mutation (tag add/remove/set, app delete, report
-resolve/dismiss) appends an entry to the in-memory action log. MKT-008 will
-expose this log read-only at `GET /moderation/log`.
+resolve/dismiss) and every report filing appends an entry to the in-memory
+action log. The same entries are mirrored unauthenticated at
+`GET /moderation/log` (MKT-008) — newest first, paginated, with optional
+`app_id` / `action` filters. Per SPEC §10 this public feed is the canonical
+record of marketplace policy decisions; it is append-only and entries are
+never edited or removed after they are written.
 
 ### Run locally
 

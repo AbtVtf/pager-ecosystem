@@ -685,7 +685,7 @@
     }
   },
   "info": {
-    "description": "Implements MKT-002 (registry CRUD + search), MKT-003 (DNS TXT publish-time challenge), and MKT-006 (moderation queue + admin tooling). The admin surface lives under `/admin` and is gated by an admin bearer token.",
+    "description": "Implements MKT-002 (registry CRUD + search), MKT-003 (DNS TXT publish-time challenge), MKT-006 (moderation queue + admin tooling), and MKT-008 (public moderation log). The admin surface lives under `/admin` and is gated by an admin bearer token; the public moderation log at `GET /moderation/log` mirrors the admin action log read-only with no auth.",
     "summary": "Registry REST API for PagerOS apps (SPEC \u00a710).",
     "title": "PagerOS Marketplace Registry",
     "version": "0.3.0"
@@ -991,7 +991,7 @@
     },
     "/admin/log": {
       "get": {
-        "description": "Append-only log of admin actions and report events. MKT-008 will publish this read-only at `GET /moderation/log`.",
+        "description": "Append-only log of admin actions and report events. The same entries are also exposed unauthenticated at `GET /moderation/log` (MKT-008).",
         "operationId": "admin_list_log_admin_log_get",
         "parameters": [
           {
@@ -2268,6 +2268,99 @@
         "summary": "Liveness probe",
         "tags": [
           "meta"
+        ]
+      }
+    },
+    "/moderation/log": {
+      "get": {
+        "description": "Append-only, read-only public feed of policy decisions: app registrations are reviewed via reports, admins add/remove trust tags or delete apps, and reports are resolved or dismissed. Every such action is recorded as an entry here, newest first. No authentication required. Entries are stable: an entry is never modified or removed after it is appended. Per SPEC \u00a710, this is the canonical public record of marketplace moderation.",
+        "operationId": "public_moderation_log_moderation_log_get",
+        "parameters": [
+          {
+            "description": "Filter entries to a single app id.",
+            "in": "query",
+            "name": "app_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter entries to a single app id.",
+              "title": "App Id"
+            }
+          },
+          {
+            "description": "Filter to a single action key (e.g. `app.delete`, `app.tag.add`, `app.tag.remove`, `app.tags.set`, `report.file`, `report.resolve`, `report.dismiss`).",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a single action key (e.g. `app.delete`, `app.tag.add`, `app.tag.remove`, `app.tags.set`, `report.file`, `report.resolve`, `report.dismiss`).",
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_LogRecord_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Public moderation log (MKT-008)",
+        "tags": [
+          "moderation"
         ]
       }
     },
