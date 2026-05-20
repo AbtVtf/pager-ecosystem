@@ -87,3 +87,48 @@ func TestVectorsMatch(t *testing.T) {
 		}
 	})
 }
+
+// TestFragmentVectorsMatch locks the fragment-body codec to the on-disk
+// cross-impl vectors (LORA-002). Each vector is the byte content that
+// rides in an outer envelope's Payload field for one fragment.
+func TestFragmentVectorsMatch(t *testing.T) {
+	type pos struct {
+		file string
+		frag Fragment
+	}
+	positives := []pos{
+		{"frag_01_single.hex", Fragment{FragID: 0, Total: 1, Data: []byte("hello")}},
+		{"frag_02_first_of_three.hex", Fragment{FragID: 0, Total: 3, Data: bytes.Repeat([]byte{0xAB}, 50)}},
+		{"frag_03_last_of_three.hex", Fragment{FragID: 2, Total: 3, Data: []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A}}},
+	}
+	for _, p := range positives {
+		t.Run(p.file, func(t *testing.T) {
+			want := readVector(t, p.file)
+			got, err := EncodeFragmentBody(p.frag)
+			if err != nil {
+				t.Fatalf("EncodeFragmentBody: %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("encode mismatch\n got  %x\n want %x", got, want)
+			}
+			dec, err := DecodeFragmentBody(want)
+			if err != nil {
+				t.Fatalf("DecodeFragmentBody: %v", err)
+			}
+			if dec.FragID != p.frag.FragID || dec.Total != p.frag.Total || !bytes.Equal(dec.Data, p.frag.Data) {
+				t.Errorf("decode mismatch:\n got  %+v\n want %+v", dec, p.frag)
+			}
+		})
+	}
+
+	t.Run("neg_frag_01_total_zero.hex", func(t *testing.T) {
+		if _, err := DecodeFragmentBody(readVector(t, "neg_frag_01_total_zero.hex")); !errors.Is(err, ErrFragZeroTotal) {
+			t.Fatalf("want ErrFragZeroTotal, got %v", err)
+		}
+	})
+	t.Run("neg_frag_02_id_out_of_range.hex", func(t *testing.T) {
+		if _, err := DecodeFragmentBody(readVector(t, "neg_frag_02_id_out_of_range.hex")); !errors.Is(err, ErrFragOutOfRange) {
+			t.Fatalf("want ErrFragOutOfRange, got %v", err)
+		}
+	})
+}
