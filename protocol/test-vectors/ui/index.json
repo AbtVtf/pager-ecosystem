@@ -15,7 +15,7 @@
     "encode",
     "negative"
   ],
-  "count": 80,
+  "count": 86,
   "vectors": [
     {
       "name": "widget_text_minimal_string",
@@ -495,6 +495,78 @@
       "files": {
         "descriptor": "vectors/widget_frame_full_kitchen_sink_numeric.json",
         "cbor": "vectors/widget_frame_full_kitchen_sink_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_subscribe_groups_empty_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Frame with explicit empty subscribe_groups array (no active groups) (string tags)",
+      "size_bytes": 76,
+      "files": {
+        "descriptor": "vectors/widget_frame_subscribe_groups_empty_string.json",
+        "cbor": "vectors/widget_frame_subscribe_groups_empty_string.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_subscribe_groups_empty_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Frame with explicit empty subscribe_groups array (no active groups) (numeric tags)",
+      "size_bytes": 72,
+      "files": {
+        "descriptor": "vectors/widget_frame_subscribe_groups_empty_numeric.json",
+        "cbor": "vectors/widget_frame_subscribe_groups_empty_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_subscribe_groups_multi_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Frame subscribing to two groups with one chat + one presence_list (string tags)",
+      "size_bytes": 236,
+      "files": {
+        "descriptor": "vectors/widget_frame_subscribe_groups_multi_string.json",
+        "cbor": "vectors/widget_frame_subscribe_groups_multi_string.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_subscribe_groups_multi_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Frame subscribing to two groups with one chat + one presence_list (numeric tags)",
+      "size_bytes": 219,
+      "files": {
+        "descriptor": "vectors/widget_frame_subscribe_groups_multi_numeric.json",
+        "cbor": "vectors/widget_frame_subscribe_groups_multi_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_subscribe_groups_with_subscribe_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Frame populating both subscribe and subscribe_groups simultaneously (string tags)",
+      "size_bytes": 145,
+      "files": {
+        "descriptor": "vectors/widget_frame_subscribe_groups_with_subscribe_string.json",
+        "cbor": "vectors/widget_frame_subscribe_groups_with_subscribe_string.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_subscribe_groups_with_subscribe_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Frame populating both subscribe and subscribe_groups simultaneously (numeric tags)",
+      "size_bytes": 141,
+      "files": {
+        "descriptor": "vectors/widget_frame_subscribe_groups_with_subscribe_numeric.json",
+        "cbor": "vectors/widget_frame_subscribe_groups_with_subscribe_numeric.cbor"
       }
     },
     {

@@ -120,7 +120,7 @@ device-side renderer consumes Frames; the App Server produces them.
 | `body` | yes | array of widget | Empty array is valid; renders a blank screen. |
 | `actions` | no | array of action | See §5.12. |
 | `subscribe` | no | array | Mixed numeric / string event tags accepted (§6.1, registry). |
-| `subscribe_groups` | no | array of tstr | Group identifiers; opaque to the protocol. |
+| `subscribe_groups` | no | array of tstr | Group identifiers; opaque to the protocol. See §6.2.3 for replacement semantics and the 8-group SHOULD cap. |
 | `meta` | no | map | Renderers MUST ignore unknown keys here. Reserved for SDK→server round-tripping (e.g., correlation ids). |
 
 Unknown top-level keys MUST be silently ignored (forward compat).
@@ -442,38 +442,141 @@ A response body of CBOR `null` or HTTP 204 means "no UI change."
 ### 6.2 Group events (multi-device)
 
 Apps that opt in via the manifest's `multi_device: true` flag
-(`SPEC.md` §10.2) can use group events. Devices subscribe per-group
-in a Frame's `subscribe_groups`.
-
-| Event (string \| numeric) | Direction | Payload |
-|---|---|---|
-| `member_joined` \| 16 | server → device | `{ "group_id": tstr, "member": { "id": tstr, "name": tstr? } }` |
-| `member_left` \| 17 | server → device | `{ "group_id": tstr, "member_id": tstr }` |
-| `presence_update` \| 18 | server → device | `{ "group_id": tstr, "members": [ { "id": tstr, "online": bool }, … ] }` |
-| `group_message` \| 19 | server → device | `{ "group_id": tstr, "from": tstr, "ts": uint, "s": tstr }` |
-
-Delivery:
-
-- **Wi-Fi connected:** the SDK exposes an `events()` long-poll endpoint
-  (`GET /events?since=<cursor>`); the device holds one connection per
-  foregrounded app and applies events as they arrive.
-- **Otherwise:** group events ride the Push Relay with envelope
-  `kind: "group_event"` (`SPEC.md` §6.6.6) and are applied on the next
-  wake/poll.
-
-Renderer behavior on receipt:
-
-- `member_joined` / `member_left` mutate the cached `presence_list`'s
-  `members` array.
-- `presence_update` replaces the `online` flags in `members`.
-- `group_message` appends to the cached `chat` widget's `messages`
-  array.
-
-The cached Screen is mutated in place; no full Frame refetch is
-triggered solely by an event.
+(`SPEC.md` §10.2) can send events from the App Server to the device
+that mutate already-rendered widgets without a full Frame refetch.
+This section is normative for the four v1 group events
+(`member_joined`, `member_left`, `presence_update`, `group_message`)
+and the `subscribe_groups` Frame field that scopes their delivery.
 
 Group state (membership lists, history) is owned by the App Server.
-The device only renders.
+The device only renders; it does not maintain authoritative group
+state and never sources a group event itself (§6.2.6).
+
+#### 6.2.1 `group_id`
+
+A **group id** (`group_id`) is a tstr chosen by the App Server. It is
+opaque to the protocol: the device, renderer, SDKs, and Push Relay
+treat it as an unanalyzed key. Producers SHOULD keep it ≤ 64 UTF-8
+codepoints; longer values encode and route correctly but bloat cache
+fingerprints and LoRa frames.
+
+`group_id` appears in exactly three contexts in the UI protocol:
+
+1. **Inside a multi-device widget map** — `presence_list.group_id`
+   (§5.9) and `chat.group_id` (§5.10). This binds a rendered widget
+   instance to the group whose state it mirrors. A Screen MAY contain
+   multiple `presence_list` / `chat` widgets bound to different group
+   ids; the renderer applies an inbound event to every widget whose
+   `group_id` matches.
+2. **Inside a group event payload** (§6.2.4) — every group event
+   carries `group_id` as its first routing key, used to locate the
+   matching widget(s) in the cached Screen.
+3. **Inside `Frame.subscribe_groups`** (§6.2.3) — declares the set of
+   group ids the device wants events for while the Screen is
+   foregrounded.
+
+A device receiving a group event whose `group_id` is not present in
+both the most recently rendered `Frame.subscribe_groups` array and at
+least one cached `presence_list` / `chat` widget MUST drop the event
+silently — no error to the App Server, no log surfaced to the user.
+This makes mis-routing on the App Server side observably benign at
+the renderer.
+
+#### 6.2.2 Spec gate for new group events
+
+Adding a new group event tag follows the same gate as §6.1's built-in
+events (tag-registry §4.1): a `SPEC.md` change defining the payload
+shape, an entry in this section's table (§6.2.4), an allocation in
+`protocol/tag-registry.md` §4 within the 20–23 reserved band, and a
+matching pair of test vectors under `protocol/test-vectors/ui/`.
+
+#### 6.2.3 `Frame.subscribe_groups`
+
+`Frame.subscribe_groups` is the **complete and authoritative** set of
+group subscriptions for the rendered Screen. The device:
+
+- MUST replace any prior subscription set with this Frame's value on
+  every Frame render — subscriptions do not accumulate across Frames.
+- MUST treat absence and an empty array as equivalent (no group
+  subscriptions for this Screen). Encoders MAY omit an empty array.
+- MUST silently ignore non-tstr entries (forward-compat with future
+  subscription forms).
+- SHOULD cap the active subscription set at 8 group ids per Screen;
+  entries beyond the eighth MAY be dropped. (Chat and presence widgets
+  typically reference a single group; the cap is implementation
+  conservatism, not a wire limit.)
+
+Unlike `subscribe` (§6.1), `subscribe_groups` has no numeric-tag form:
+its entries are opaque App-Server-defined identifiers (§6.2.1), not
+registry tags. The two arrays are independent namespaces; a Frame MAY
+populate both.
+
+#### 6.2.4 Group event envelope
+
+Every server→device group event is a single top-level CBOR map with
+the same two-key shape as a §6.1 device→app event:
+
+```cbor
+{
+  "type":    <event-tag>,           ; tstr or uint (registry §4)
+  "payload": { "group_id": <tstr>,
+               … event-specific … }
+}
+```
+
+`type` and `payload` are the only top-level keys. Producers MAY use
+the string or numeric form of `type`; consumers MUST accept both
+(registry §2.2). Every v1 group event payload MUST carry `group_id`
+as a tstr; the remaining keys are event-specific.
+
+| Event (string \| numeric) | Payload (other than `group_id`) | Renderer effect |
+|---|---|---|
+| `member_joined` \| 16 | `member: { id: tstr, name: tstr? }` | Append `member` to every cached `presence_list.members` bound to `group_id`, unless the same `id` is already present. |
+| `member_left` \| 17 | `member_id: tstr` | Remove the matching `id` from every cached `presence_list.members` bound to `group_id`. No-op if absent. |
+| `presence_update` \| 18 | `members: [ { id: tstr, online: bool }, … ]` | For every cached `presence_list` bound to `group_id`, replace the `online` flag on each matching member. Members not yet known MAY be appended with the given `online` flag and no `name`. |
+| `group_message` \| 19 | `from: tstr, ts: uint, s: tstr` | Append `{ from, ts, s }` to every cached `chat.messages` bound to `group_id`. `ts` is epoch-seconds. |
+
+Unknown payload keys MUST be silently ignored (§9.2 forward-compat).
+An envelope missing `type`, missing `payload`, or missing a required
+payload field for the resolved event type MUST be dropped without
+mutating any widget.
+
+The cached Screen is mutated in place; no full Frame refetch is
+triggered solely by a group event.
+
+#### 6.2.5 Delivery channels
+
+A single logical event is delivered to a device over exactly one
+channel per delivery attempt, chosen by the App Server:
+
+- **Wi-Fi, app foregrounded:** the SDK exposes `GET /events?since=<cursor>`
+  as a long-poll endpoint. The response body is a CBOR array of group
+  event envelopes (§6.2.4); the device applies each in order and
+  reissues the poll with the latest cursor. The cursor is opaque to
+  the device — only the App Server interprets it. The endpoint returns
+  HTTP 204 with an empty body when the long-poll times out with no
+  pending events.
+- **Anything else** (LoRa-only, Wi-Fi backgrounded, app not running):
+  the App Server SHOULD enqueue the event onto the Push Relay
+  (`SPEC.md` §6.6) as a `kind: "group_event"` envelope. The
+  X25519+ChaCha20-Poly1305-encrypted inner payload (relay §6.6.3) is
+  exactly the §6.2.4 CBOR map. The device drains the queue on every
+  wake/poll and applies events in the relay's enqueue-time order.
+
+Both channels are **at-least-once**. Renderer effects under §6.2.4 are
+idempotent (joining a member twice is a no-op; replacing the same
+`online` flag is a no-op). Chat consumers SHOULD dedupe messages by
+`(from, ts, s)` when an at-least-once delivery resurfaces a message
+already in the cached Screen.
+
+#### 6.2.6 Devices do not emit group events
+
+In v1, group events flow server→device only. A device has no
+device→server group-event path. User-originated state changes happen
+via normal request envelopes (§7) — for example, posting a `chat`
+composer submission to the app's `/send` endpoint, which the App
+Server then fans out as a `group_message` event to other group
+members.
 
 ### 6.3 Unknown events
 

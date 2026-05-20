@@ -602,6 +602,88 @@ def widget_vectors() -> list[Vector]:
         },
     )
 
+    # §6.2.3 subscribe_groups Frame field — explicit empty array.
+    # Spec MUST: encoders MAY omit an empty array; this vector pins the
+    # on-wire shape for producers that choose to emit it explicitly so
+    # decoders treat it as equivalent to absent.
+    both(
+        "frame_subscribe_groups_empty",
+        "Frame with explicit empty subscribe_groups array (no active groups)",
+        {
+            "v": 1,
+            "id": "scr_no_groups",
+            "subscribe_groups": [],
+            "body": [{"t": "text", "s": "no groups subscribed"}],
+        },
+        notes=(
+            "Spec §6.2.3: encoders MAY omit an empty array. Decoders MUST "
+            "treat absence and `[]` as equivalent (no subscriptions)."
+        ),
+    )
+
+    # §6.2.3 subscribe_groups Frame field — two distinct groups, with
+    # multi-device widgets in `body` bound to each. Exercises the
+    # "multiple widgets bound to different group_id" assertion in §6.2.1.
+    both(
+        "frame_subscribe_groups_multi",
+        "Frame subscribing to two groups with one chat + one presence_list",
+        {
+            "v": 1,
+            "id": "scr_two_groups",
+            "subscribe_groups": ["grp_abc", "grp_xyz"],
+            "body": [
+                {
+                    "t": "chat",
+                    "group_id": "grp_abc",
+                    "messages": [
+                        {"from": "alice", "ts": 1716200000, "s": "hi"},
+                    ],
+                    "compose": {"name": "msg", "submit": "/send"},
+                },
+                {
+                    "t": "presence_list",
+                    "group_id": "grp_xyz",
+                    "members": [
+                        {"id": "pk_alice", "online": True},
+                        {"id": "pk_bob", "online": False},
+                    ],
+                },
+            ],
+        },
+        notes=(
+            "Spec §6.2.1: a Screen MAY contain multiple multi-device "
+            "widgets bound to different `group_id`s. §6.2.3: "
+            "`subscribe_groups` entries are tstr; the array has no "
+            "numeric-tag form."
+        ),
+    )
+
+    # §6.2.3 subscribe_groups Frame field — mixed with §6.1 `subscribe`.
+    # Pins that the two arrays coexist independently in one Frame.
+    both(
+        "frame_subscribe_groups_with_subscribe",
+        "Frame populating both subscribe and subscribe_groups simultaneously",
+        {
+            "v": 1,
+            "id": "scr_mixed_subs",
+            "subscribe": ["nfc_scan", "back"],
+            "subscribe_groups": ["grp_abc"],
+            "body": [
+                {
+                    "t": "chat",
+                    "group_id": "grp_abc",
+                    "messages": [],
+                    "compose": {"name": "msg", "submit": "/send"},
+                },
+            ],
+        },
+        notes=(
+            "Spec §6.2.3: `subscribe` (event-tag registry) and "
+            "`subscribe_groups` (opaque group ids) are independent "
+            "namespaces; a Frame MAY populate both."
+        ),
+    )
+
     return out
 
 

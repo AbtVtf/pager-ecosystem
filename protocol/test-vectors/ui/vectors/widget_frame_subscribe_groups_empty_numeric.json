@@ -1,0 +1,22 @@
+{
+  "category": "widget",
+  "description": "Frame with explicit empty subscribe_groups array (no active groups) (numeric tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a46176016269646d7363725f6e6f5f67726f75707364626f647981a26173746e6f2067726f7570732073756273637269626564617401707375627363726962655f67726f75707380",
+  "expected_size_bytes": 72,
+  "input": {
+    "body": [
+      {
+        "s": "no groups subscribed",
+        "t": 1
+      }
+    ],
+    "id": "scr_no_groups",
+    "subscribe_groups": [],
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_frame_subscribe_groups_empty_numeric",
+  "notes": "Spec \u00a76.2.3: encoders MAY omit an empty array. Decoders MUST treat absence and `[]` as equivalent (no subscriptions).",
+  "tag_form": "numeric"
+}

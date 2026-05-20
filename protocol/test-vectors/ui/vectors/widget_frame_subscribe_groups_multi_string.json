@@ -1,0 +1,50 @@
+{
+  "category": "widget",
+  "description": "Frame subscribing to two groups with one chat + one presence_list (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a46176016269646e7363725f74776f5f67726f75707364626f647982a46174646368617467636f6d706f7365a2646e616d65636d7367667375626d6974652f73656e646867726f75705f6964676772705f616263686d6573736167657381a361736268696274731a664b22406466726f6d65616c696365a361746d70726573656e63655f6c697374676d656d6265727382a262696468706b5f616c696365666f6e6c696e65f5a262696466706b5f626f62666f6e6c696e65f46867726f75705f6964676772705f78797a707375627363726962655f67726f75707382676772705f616263676772705f78797a",
+  "expected_size_bytes": 236,
+  "input": {
+    "body": [
+      {
+        "compose": {
+          "name": "msg",
+          "submit": "/send"
+        },
+        "group_id": "grp_abc",
+        "messages": [
+          {
+            "from": "alice",
+            "s": "hi",
+            "ts": 1716200000
+          }
+        ],
+        "t": "chat"
+      },
+      {
+        "group_id": "grp_xyz",
+        "members": [
+          {
+            "id": "pk_alice",
+            "online": true
+          },
+          {
+            "id": "pk_bob",
+            "online": false
+          }
+        ],
+        "t": "presence_list"
+      }
+    ],
+    "id": "scr_two_groups",
+    "subscribe_groups": [
+      "grp_abc",
+      "grp_xyz"
+    ],
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_frame_subscribe_groups_multi_string",
+  "notes": "Spec \u00a76.2.1: a Screen MAY contain multiple multi-device widgets bound to different `group_id`s. \u00a76.2.3: `subscribe_groups` entries are tstr; the array has no numeric-tag form.",
+  "tag_form": "string"
+}

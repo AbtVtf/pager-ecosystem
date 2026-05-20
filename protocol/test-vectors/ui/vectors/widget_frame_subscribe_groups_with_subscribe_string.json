@@ -1,0 +1,33 @@
+{
+  "category": "widget",
+  "description": "Frame populating both subscribe and subscribe_groups simultaneously (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a56176016269646e7363725f6d697865645f7375627364626f647981a46174646368617467636f6d706f7365a2646e616d65636d7367667375626d6974652f73656e646867726f75705f6964676772705f616263686d65737361676573806973756273637269626582686e66635f7363616e646261636b707375627363726962655f67726f75707381676772705f616263",
+  "expected_size_bytes": 145,
+  "input": {
+    "body": [
+      {
+        "compose": {
+          "name": "msg",
+          "submit": "/send"
+        },
+        "group_id": "grp_abc",
+        "messages": [],
+        "t": "chat"
+      }
+    ],
+    "id": "scr_mixed_subs",
+    "subscribe": [
+      "nfc_scan",
+      "back"
+    ],
+    "subscribe_groups": [
+      "grp_abc"
+    ],
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_frame_subscribe_groups_with_subscribe_string",
+  "notes": "Spec \u00a76.2.3: `subscribe` (event-tag registry) and `subscribe_groups` (opaque group ids) are independent namespaces; a Frame MAY populate both.",
+  "tag_form": "string"
+}

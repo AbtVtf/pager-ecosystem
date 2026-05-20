@@ -124,7 +124,7 @@ than byte-for-byte.
 
 | Category          | Count | Notes |
 |-------------------|-------|-------|
-| `widget`          | 40    | Every v1 widget (text, list, input, form, button, image, map, notification, presence_list, chat) plus top-bar actions and a kitchen-sink Frame. Each case has a string-tag and a numeric-tag variant. |
+| `widget`          | 46    | Every v1 widget (text, list, input, form, button, image, map, notification, presence_list, chat) plus top-bar actions, a kitchen-sink Frame, and three Frame-level `subscribe_groups` cases (empty, multi-group with bound widgets, combined with `subscribe`) covering PROTO-004 spec §6.2.3. Each case has a string-tag and a numeric-tag variant. |
 | `event`           | 18    | Every device→app event (`nfc_scan`, `location`, `back`, `tick`, `notification_action`) and every server→device group event (`member_joined`, `member_left`, `presence_update`, `group_message`). String + numeric `type` discriminator variants for each. |
 | `error`           | 8     | Server-provided bodies for 400 / 401 / 403 / 404 / 410 / 429 / 5xx, plus the locally-built error frame shape (`id: "err_local"`, `style: "error"`) from spec §7.4.1. |
 | `oversized`       | 3     | Chat-heavy, list-heavy, and form-heavy Frames each well over the 200 B LoRa budget. SDKs MUST surface the LoRa size warning (PY-011 hook) for these. |
