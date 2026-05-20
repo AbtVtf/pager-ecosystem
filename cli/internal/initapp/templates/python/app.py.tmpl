@@ -1,0 +1,18 @@
+"""{{.Name}} — a minimal PagerOS app."""
+
+from pageros import App
+
+app = App(name="{{.Name}}")
+
+
+@app.screen("/")
+def home():
+    return {
+        "v": 1,
+        "id": "scr_home",
+        "body": [{"t": "text", "s": "Hello from {{.Name}}!"}],
+    }
+
+
+if __name__ == "__main__":
+    app.run()

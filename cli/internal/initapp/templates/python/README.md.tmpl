@@ -1,0 +1,22 @@
+# {{.Name}}
+
+A PagerOS app scaffolded by `pagerctl init python`.
+
+## Run
+
+```sh
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python app.py --host 127.0.0.1 --port 8000
+```
+
+Then point a simulator or device at `http://127.0.0.1:8000/`.
+
+## Publish
+
+```sh
+pagerctl publish
+```
+
+`pagerctl publish` reads `manifest.yaml`, walks the DNS TXT challenge for the
+URL's host, and registers the app with the Marketplace.
