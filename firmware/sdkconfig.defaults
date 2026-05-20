@@ -13,9 +13,13 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
-# --- PSRAM (8 MB Octal on N16R8) ---
+# --- PSRAM (8 MB Quad on T-LoRa Pager) ---
+# The board ships an ESP32-S3 with 8 MB QSPI (quad) PSRAM, not OPI/octal.
+# Empirically verified on /dev/ttyACM0: octal mode reports
+# `octal_psram: PSRAM ID read error: 0x00000000` (PAG-121); quad mode reports
+# `esp_psram: Found 8MB PSRAM device` and passes the self-test r/w probe.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
