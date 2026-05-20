@@ -107,6 +107,9 @@ Open registration plus post-hoc moderation per SPEC §10.5. Any user may
 | `DELETE` | `/apps/{app_id}` | admin | Remove an app (logged to the moderation log). |
 | `GET` | `/admin/log` | admin | Append-only moderation action log. |
 | `GET` | `/moderation/log` | none | Public read-only moderation log (MKT-008). |
+| `POST` | `/admin/apps/{app_id}/featured` | admin | Pin (or re-pin) an app as featured (MKT-010). |
+| `DELETE` | `/admin/apps/{app_id}/featured` | admin | Unpin an app from featured (MKT-010). |
+| `GET` | `/apps/featured` | none | Public list of featured apps, newest pin first (MKT-010). |
 | `GET` | `/admin/ui` | admin | Server-rendered moderation dashboard (HTML). |
 
 Trust tags are an exclusive allowlist (SPEC §10.5): `verified`, `featured`,
@@ -118,13 +121,34 @@ include `Authorization: Bearer <token>`. When `admin_token` is `None` (the
 default), the admin surface is unauthenticated — useful for tests and local
 development but **must** be set in production.
 
-Every admin mutation (tag add/remove/set, app delete, report
-resolve/dismiss) and every report filing appends an entry to the in-memory
-action log. The same entries are mirrored unauthenticated at
+Every admin mutation (tag add/remove/set, app delete, featured pin/unpin,
+report resolve/dismiss) and every report filing appends an entry to the
+in-memory action log. The same entries are mirrored unauthenticated at
 `GET /moderation/log` (MKT-008) — newest first, paginated, with optional
 `app_id` / `action` filters. Per SPEC §10 this public feed is the canonical
 record of marketplace policy decisions; it is append-only and entries are
 never edited or removed after they are written.
+
+### Featured curation (MKT-010)
+
+Admins pin apps to the "Featured" rail via `POST /admin/apps/{app_id}/featured`
+(re-pinning bumps `featured_at` so the app jumps to the head of the list);
+`DELETE /admin/apps/{app_id}/featured` unpins. The same effect is reachable
+via the underlying tag endpoint (`POST /admin/apps/{app_id}/tags/featured`),
+but the dedicated route is the one curation tooling should call — it logs
+explicit `app.featured.pin` / `app.featured.unpin` actions to the moderation
+log and supports re-pinning.
+
+Featured apps are surfaced to the public in two ways:
+
+- `GET /apps/featured` — paginated list of currently-featured apps,
+  ordered by `featured_at` DESC (most recently pinned first), then `id` ASC.
+- `GET /apps?featured_first=true` — the full catalog with featured apps
+  promoted to the top. The Shell's in-device "Apps" home (MKT-005) calls
+  this so curated picks lead the page.
+
+`AppRecord` exposes `featured_at` (null when not featured) so clients can
+render "newly featured" badges without re-querying the log.
 
 ### Run locally
 

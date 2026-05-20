@@ -1,4 +1,4 @@
-"""FastAPI app factory for the marketplace registry (MKT-002 + MKT-003 + MKT-006 + MKT-008)."""
+"""FastAPI app factory for the marketplace registry (MKT-002 + MKT-003 + MKT-006 + MKT-008 + MKT-010)."""
 
 from __future__ import annotations
 
@@ -116,10 +116,11 @@ def create_app(
         description=(
             "Implements MKT-002 (registry CRUD + search), MKT-003 (DNS TXT "
             "publish-time challenge), MKT-006 (moderation queue + admin "
-            "tooling), and MKT-008 (public moderation log). The admin "
-            "surface lives under `/admin` and is gated by an admin bearer "
-            "token; the public moderation log at `GET /moderation/log` "
-            "mirrors the admin action log read-only with no auth."
+            "tooling), MKT-008 (public moderation log), and MKT-010 "
+            "(featured curation tooling). The admin surface lives under "
+            "`/admin` and is gated by an admin bearer token; the public "
+            "moderation log at `GET /moderation/log` mirrors the admin "
+            "action log read-only with no auth."
         ),
     )
     app.state.registry = registry
@@ -344,8 +345,48 @@ def _register_routes(app: FastAPI) -> None:
             min_length=1,
             description="Filter to apps that include this category slug.",
         ),
+        featured_first: bool = Query(
+            False,
+            description=(
+                "If true, sort featured apps first (most recently pinned "
+                "first), then the rest of the catalog (id ASC). The "
+                "in-device Apps home (MKT-005) sets this to surface "
+                "curated picks at the top (MKT-010)."
+            ),
+        ),
     ) -> Page[AppRecord]:
-        entries, total = registry.list(offset=offset, limit=limit, category=category)
+        entries, total = registry.list(
+            offset=offset,
+            limit=limit,
+            category=category,
+            featured_first=featured_first,
+        )
+        return Page[AppRecord](
+            items=[AppRecord.from_entry(e) for e in entries],
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
+
+    @app.get(
+        "/apps/featured",
+        tags=["apps"],
+        response_model=Page[AppRecord],
+        summary="List featured apps (MKT-010)",
+        description=(
+            "Returns the apps that admins have pinned with the `featured` "
+            "trust tag, ordered by `featured_at` DESC (most recently "
+            "pinned first), then `id` ASC. Public, unauthenticated. "
+            "Feeds the in-device Apps home (MKT-005) and any external "
+            "discovery surfaces that want to mirror the editorial picks."
+        ),
+    )
+    def list_featured_apps(
+        registry: Registry = Depends(_get_registry),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> Page[AppRecord]:
+        entries, total = registry.list_featured(offset=offset, limit=limit)
         return Page[AppRecord](
             items=[AppRecord.from_entry(e) for e in entries],
             total=total,
@@ -778,6 +819,74 @@ def _register_routes(app: FastAPI) -> None:
             offset=offset,
             limit=limit,
         )
+
+    # --- admin: featured curation (MKT-010) -------------------------------- #
+
+    @app.post(
+        "/admin/apps/{app_id}/featured",
+        tags=["admin"],
+        response_model=AppRecord,
+        responses={
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Pin app as featured (admin, MKT-010)",
+        description=(
+            "Idempotently sets the `featured` trust tag and bumps "
+            "`featured_at` to now (a re-pin moves the app back to the "
+            "top of the curated list). Logs an `app.featured.pin` action "
+            "to the moderation log."
+        ),
+    )
+    def admin_pin_featured(
+        app_id: str = Path(pattern=_APP_ID_PATTERN, examples=["notes.mafu.dev"]),
+        registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
+    ) -> AppRecord:
+        try:
+            entry = registry.pin_featured(app_id)
+        except UnknownAppError as exc:
+            raise _not_found(exc) from exc
+        moderation.log(
+            action="app.featured.pin",
+            actor=actor,
+            app_id=app_id,
+            details={"featured_at": entry.featured_at.isoformat() if entry.featured_at else None},
+        )
+        return AppRecord.from_entry(entry)
+
+    @app.delete(
+        "/admin/apps/{app_id}/featured",
+        tags=["admin"],
+        response_model=AppRecord,
+        responses={
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Unpin app from featured (admin, MKT-010)",
+        description=(
+            "Idempotently removes the `featured` trust tag and clears "
+            "`featured_at`. Logs an `app.featured.unpin` action to the "
+            "moderation log."
+        ),
+    )
+    def admin_unpin_featured(
+        app_id: str = Path(pattern=_APP_ID_PATTERN, examples=["notes.mafu.dev"]),
+        registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
+    ) -> AppRecord:
+        try:
+            entry = registry.unpin_featured(app_id)
+        except UnknownAppError as exc:
+            raise _not_found(exc) from exc
+        moderation.log(
+            action="app.featured.unpin",
+            actor=actor,
+            app_id=app_id,
+        )
+        return AppRecord.from_entry(entry)
 
     # --- admin: action log -------------------------------------------------- #
 

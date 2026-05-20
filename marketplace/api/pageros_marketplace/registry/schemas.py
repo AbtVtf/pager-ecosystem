@@ -28,6 +28,15 @@ class AppRecord(BaseModel):
     tags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    featured_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When the `featured` trust tag was most recently applied. "
+            "Null when the app is not currently featured. The featured "
+            "curation surface (MKT-010) orders apps by this timestamp "
+            "(most recently pinned first)."
+        ),
+    )
 
     @classmethod
     def from_entry(cls, entry: AppEntry) -> "AppRecord":
@@ -36,6 +45,7 @@ class AppRecord(BaseModel):
             tags=list(entry.tags),
             created_at=entry.created_at,
             updated_at=entry.updated_at,
+            featured_at=entry.featured_at,
         )
 
 

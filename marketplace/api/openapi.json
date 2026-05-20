@@ -10,6 +10,19 @@
             "title": "Created At",
             "type": "string"
           },
+          "featured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the `featured` trust tag was most recently applied. Null when the app is not currently featured. The featured curation surface (MKT-010) orders apps by this timestamp (most recently pinned first).",
+            "title": "Featured At"
+          },
           "manifest": {
             "$ref": "#/components/schemas/Manifest"
           },
@@ -685,13 +698,177 @@
     }
   },
   "info": {
-    "description": "Implements MKT-002 (registry CRUD + search), MKT-003 (DNS TXT publish-time challenge), MKT-006 (moderation queue + admin tooling), and MKT-008 (public moderation log). The admin surface lives under `/admin` and is gated by an admin bearer token; the public moderation log at `GET /moderation/log` mirrors the admin action log read-only with no auth.",
+    "description": "Implements MKT-002 (registry CRUD + search), MKT-003 (DNS TXT publish-time challenge), MKT-006 (moderation queue + admin tooling), MKT-008 (public moderation log), and MKT-010 (featured curation tooling). The admin surface lives under `/admin` and is gated by an admin bearer token; the public moderation log at `GET /moderation/log` mirrors the admin action log read-only with no auth.",
     "summary": "Registry REST API for PagerOS apps (SPEC \u00a710).",
     "title": "PagerOS Marketplace Registry",
     "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/apps/{app_id}/featured": {
+      "delete": {
+        "description": "Idempotently removes the `featured` trust tag and clears `featured_at`. Logs an `app.featured.unpin` action to the moderation log.",
+        "operationId": "admin_unpin_featured_admin_apps__app_id__featured_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "examples": [
+                "notes.mafu.dev"
+              ],
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Admin auth missing or invalid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "App, challenge, or report not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unpin app from featured (admin, MKT-010)",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "description": "Idempotently sets the `featured` trust tag and bumps `featured_at` to now (a re-pin moves the app back to the top of the curated list). Logs an `app.featured.pin` action to the moderation log.",
+        "operationId": "admin_pin_featured_admin_apps__app_id__featured_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "examples": [
+                "notes.mafu.dev"
+              ],
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Admin auth missing or invalid"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "App, challenge, or report not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin app as featured (admin, MKT-010)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/apps/{app_id}/tags": {
       "put": {
         "description": "Replaces the full set of trust tags on an app. Allowed tags: ['featured', 'flagged', 'verified'].",
@@ -1547,6 +1724,18 @@
               "description": "Filter to apps that include this category slug.",
               "title": "Category"
             }
+          },
+          {
+            "description": "If true, sort featured apps first (most recently pinned first), then the rest of the catalog (id ASC). The in-device Apps home (MKT-005) sets this to surface curated picks at the top (MKT-010).",
+            "in": "query",
+            "name": "featured_first",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "If true, sort featured apps first (most recently pinned first), then the rest of the catalog (id ASC). The in-device Apps home (MKT-005) sets this to surface curated picks at the top (MKT-010).",
+              "title": "Featured First",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -1883,6 +2072,63 @@
         "summary": "Verify a DNS TXT challenge",
         "tags": [
           "challenges"
+        ]
+      }
+    },
+    "/apps/featured": {
+      "get": {
+        "description": "Returns the apps that admins have pinned with the `featured` trust tag, ordered by `featured_at` DESC (most recently pinned first), then `id` ASC. Public, unauthenticated. Feeds the in-device Apps home (MKT-005) and any external discovery surfaces that want to mirror the editorial picks.",
+        "operationId": "list_featured_apps_apps_featured_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AppRecord_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List featured apps (MKT-010)",
+        "tags": [
+          "apps"
         ]
       }
     },
