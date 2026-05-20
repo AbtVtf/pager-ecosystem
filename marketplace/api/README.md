@@ -6,8 +6,8 @@ Server-side of the PagerOS marketplace registry (SPEC.md §10).
 |---|---|---|
 | MKT-001 | YAML manifest schema + validator | done |
 | MKT-002 | Registry REST API (CRUD apps, list, search) + OpenAPI doc | done |
+| MKT-003 | DNS TXT publish-time challenge service | done |
 | MKT-011 | Deployment artifacts + ops plan (registry portion) | scaffolded, see `DEPLOYMENT.md` |
-| MKT-003 | DNS TXT challenge service | upcoming |
 | MKT-006 | Moderation queue + trust tagging | upcoming |
 
 ## Install (dev)
@@ -52,19 +52,42 @@ The registry exposes a small REST surface for app discovery. All bodies are JSON
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/apps` | Register a new app from a manifest. Rejects duplicates by `id` (`409`). |
+| `POST` | `/apps/challenges` | Start a publish-time DNS TXT challenge (MKT-003). |
+| `POST` | `/apps/challenges/{id}/verify` | Verify the developer published the expected TXT record. |
+| `GET` | `/apps/challenges/{id}` | Inspect a challenge (state + TXT instructions). |
+| `POST` | `/apps` | Register a new app from a manifest. Requires `X-Challenge-Token`. Rejects duplicates by `id` (`409`). |
 | `GET` | `/apps` | List apps. Supports `offset`, `limit`, optional `category` filter. |
 | `GET` | `/apps/{app_id}` | Get one app by its manifest `id`. |
-| `PUT` | `/apps/{app_id}` | Replace an app's manifest. `version` must strictly increase. |
+| `PUT` | `/apps/{app_id}` | Replace an app's manifest. `version` must strictly increase. Requires `X-Challenge-Token`. |
 | `DELETE` | `/apps/{app_id}` | Remove an app from the registry. |
 | `GET` | `/apps/search?q=...` | Case-insensitive search across `id`, `name`, `description`, `categories`. |
 | `GET` | `/healthz` | Liveness probe. |
 
 Manifests are validated against the SPEC §10.2 schema on every write — invalid
 submissions get a structured 422 (FastAPI's standard validation envelope) or a
-400 for higher-level errors. DNS TXT verification (MKT-003) and moderation
-tagging (MKT-006) layer on top of this surface; this milestone only delivers
-the unauthenticated CRUD surface.
+400 for higher-level errors. Moderation tagging (MKT-006) layers on top of
+this surface and is delivered separately.
+
+### DNS TXT publish-time challenge (MKT-003)
+
+`POST /apps` and `PUT /apps/{app_id}` require an `X-Challenge-Token` header
+proving the caller controls the host in `manifest.url`. The flow is:
+
+1. `POST /apps/challenges` with `{"app_id": "notes.mafu.dev", "url": "https://notes.app/"}`
+   returns `{id, token, txt_name, txt_value, expires_at, ...}`.
+2. Developer creates a DNS TXT record at `txt_name`
+   (e.g. `_pageros-challenge.notes.app`) with value `txt_value`
+   (e.g. `pageros-challenge=<token>`).
+3. `POST /apps/challenges/{id}/verify` — marketplace performs a live DNS
+   lookup; on a match the challenge is marked verified.
+4. `POST /apps` with the manifest plus `X-Challenge-Token: <token>` — the
+   registry consumes the token (single-use) iff `app_id` and the URL host
+   match what the challenge was issued for.
+
+Tokens default to a 1-hour issuance TTL and a 24-hour post-verification TTL.
+Live DNS resolution uses `dnspython`; tests inject `FakeResolver` via
+`create_app(..., dns_resolver=FakeResolver())`. To opt out of the gate for
+embedded/local-dev setups, pass `challenge_required=False` to `create_app`.
 
 ### Run locally
 

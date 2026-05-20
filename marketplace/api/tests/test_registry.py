@@ -34,7 +34,9 @@ def _manifest(
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(Registry()))
+    # MKT-002 tests assert pre-challenge-gate behavior. The challenge gate is
+    # covered separately in test_challenges.py.
+    return TestClient(create_app(Registry(), challenge_required=False))
 
 
 # --- register -------------------------------------------------------------- #
