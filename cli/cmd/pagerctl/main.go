@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 )
@@ -37,7 +38,12 @@ func main() {
 		fmt.Printf("pagerctl %s (commit %s, built %s)\n", version, commit, date)
 	case "help", "--help", "-h":
 		fmt.Print(usage)
-	case "init", "dev", "simulate", "publish", "flash", "link":
+	case "flash":
+		if err := runFlash(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "pagerctl flash: %v\n", err)
+			os.Exit(1)
+		}
+	case "init", "dev", "simulate", "publish", "link":
 		fmt.Fprintf(os.Stderr, "pagerctl: %q is not implemented yet\n", os.Args[1])
 		os.Exit(1)
 	default:

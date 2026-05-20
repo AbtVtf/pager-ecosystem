@@ -11,6 +11,28 @@ go build -o pagerctl ./cmd/pagerctl
 ./pagerctl version
 ```
 
+## Flash firmware (CLI-005)
+
+```sh
+pagerctl flash path/to/fw.bin
+```
+
+The `flash` command auto-detects an attached ESP32-S3 by USB VID/PID (Espressif
+native USB-Serial-JTAG `303a:*`, plus common UART bridges: CP210x, CH340/343,
+FT232) and shells out to [`esptool`](https://github.com/espressif/esptool) to
+write the binary and verify it via SHA256.
+
+Flags:
+
+- `--port <path>` — bypass auto-detect (e.g. `/dev/ttyACM0`, `COM3`).
+- `--chip <name>` — target chip family (default `esp32s3`).
+- `--baud <n>` — baud rate (default `460800`).
+- `--offset <hex>` — flash offset (default `0x10000`). Use `0x20000` to write
+  to the PagerOS factory recovery slot, or `0x0` for a merged image produced
+  by `idf.py merge-bin`.
+
+Requires `esptool` (v4.6+) or `esptool.py` on `PATH` (`pipx install esptool`).
+
 ## Install
 
 | Platform           | Command                                                                                                  |
