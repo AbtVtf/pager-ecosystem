@@ -49,6 +49,17 @@
         pointer-events: none;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
+      #input-feed {
+        position: absolute;
+        left: 4px;
+        bottom: 14px;
+        font-size: 9px;
+        color: rgba(140, 230, 140, 0.85);
+        background: rgba(0, 40, 0, 0.45);
+        padding: 0 3px;
+        pointer-events: none;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
       #picker {
         position: absolute;
         top: 0;
@@ -76,13 +87,15 @@
   <body>
     <img id="screen" alt="device screen" />
     <div id="picker" role="listbox" aria-label="PROTO-003 vectors"></div>
+    <div id="input-feed"></div>
     <div id="status">…</div>
-    <div id="hint">←/→ cycle · p picker · r reload</div>
+    <div id="hint">Alt+J/K vectors · Alt+P picker · Alt+R reload · Esc=BACK · arrows=encoder</div>
     <script type="module">
       const { invoke } = window.__TAURI__.core;
 
       const screen = document.getElementById('screen');
       const status = document.getElementById('status');
+      const inputFeed = document.getElementById('input-feed');
       const picker = document.getElementById('picker');
       const hint   = document.getElementById('hint');
 
@@ -148,40 +161,117 @@
         }
       }
 
-      window.addEventListener('keydown', (ev) => {
-        if (vectors.length === 0) return;
+      // ─────────────────────────────────────────────────────────────
+      // SIM-003 — host keyboard → device InputEvent dispatch.
+      //
+      // Most keys emit on keydown so the device reacts immediately. BACK
+      // (Escape) emits on keyup with a press_ms stamp so the Rust mapper
+      // can distinguish Back from BackLong per SPEC.md §5.6.2.
+      //
+      // Dev shortcuts (vector picker, reload, hint toggle) live behind
+      // the Alt modifier so they never collide with device input.
+      // ─────────────────────────────────────────────────────────────
+
+      const escapeDown = new Map(); // key id → epoch ms when pressed
+
+      function showEvent(ev) {
+        if (!ev) {
+          inputFeed.textContent = '';
+          return;
+        }
+        let label;
+        switch (ev.kind) {
+          case 'char':       label = ev.value === ' ' ? 'SPACE' : ev.value; break;
+          case 'backspace':  label = 'BKSP'; break;
+          case 'encoder':    label = `ENC ${ev.value > 0 ? '+' : ''}${ev.value}`; break;
+          case 'enter':      label = 'ENT'; break;
+          case 'back':       label = 'BACK'; break;
+          case 'back_long':  label = 'BACK·HOLD'; break;
+          default:           label = ev.kind;
+        }
+        inputFeed.textContent = label;
+      }
+
+      async function dispatchHostKey(ev, eventType, pressMs) {
+        const host = {
+          key: ev.key,
+          code: ev.code,
+          event_type: eventType,
+          shift: ev.shiftKey,
+          ctrl: ev.ctrlKey,
+          alt: ev.altKey,
+          meta: ev.metaKey,
+          repeat: ev.repeat,
+          press_ms: pressMs | 0,
+        };
+        try {
+          const result = await invoke('dispatch_input', { host });
+          if (result) showEvent(result);
+          return result;
+        } catch (err) {
+          status.textContent = `input error: ${err}`;
+          return null;
+        }
+      }
+
+      function isAltDevShortcut(ev) {
+        return ev.altKey && !ev.ctrlKey && !ev.metaKey;
+      }
+
+      window.addEventListener('keydown', async (ev) => {
+        // Dev-only shortcuts (Alt-gated). These never reach the device.
+        if (isAltDevShortcut(ev)) {
+          switch (ev.code) {
+            case 'KeyJ':
+              index = (index + 1) % vectors.length;
+              renderCurrent();
+              ev.preventDefault();
+              return;
+            case 'KeyK':
+              index = (index - 1 + vectors.length) % vectors.length;
+              renderCurrent();
+              ev.preventDefault();
+              return;
+            case 'KeyP':
+              picker.classList.toggle('open');
+              ev.preventDefault();
+              return;
+            case 'KeyR':
+              renderCurrent();
+              ev.preventDefault();
+              return;
+            case 'KeyH':
+              hint.style.display = hint.style.display === 'none' ? '' : 'none';
+              status.style.display = hint.style.display;
+              ev.preventDefault();
+              return;
+          }
+        }
+
+        // Closing the picker with Escape is a UI concern, not a device
+        // BACK press. Swallow the Escape so it doesn't double-fire.
         if (picker.classList.contains('open') && ev.key === 'Escape') {
           picker.classList.remove('open');
           ev.preventDefault();
           return;
         }
-        switch (ev.key) {
-          case 'ArrowRight':
-          case 'j':
-            index = (index + 1) % vectors.length;
-            renderCurrent();
-            ev.preventDefault();
-            break;
-          case 'ArrowLeft':
-          case 'k':
-            index = (index - 1 + vectors.length) % vectors.length;
-            renderCurrent();
-            ev.preventDefault();
-            break;
-          case 'r':
-            renderCurrent();
-            ev.preventDefault();
-            break;
-          case 'p':
-            picker.classList.toggle('open');
-            ev.preventDefault();
-            break;
-          case 'h':
-            hint.style.display = hint.style.display === 'none' ? '' : 'none';
-            status.style.display = hint.style.display;
-            ev.preventDefault();
-            break;
+
+        // Track Escape press time so keyup can compute press_ms.
+        if (ev.key === 'Escape' && !ev.repeat) {
+          escapeDown.set(ev.code || ev.key, performance.now());
         }
+
+        const result = await dispatchHostKey(ev, 'key_down', 0);
+        if (result) ev.preventDefault();
+      });
+
+      window.addEventListener('keyup', async (ev) => {
+        if (ev.key !== 'Escape') return;
+        const downAt = escapeDown.get(ev.code || ev.key);
+        escapeDown.delete(ev.code || ev.key);
+        const pressMs = downAt == null ? 0 : Math.max(0, performance.now() - downAt);
+        const result = await dispatchHostKey(ev, 'key_up', Math.round(pressMs));
+        if (result) ev.preventDefault();
       });
 
       loadVectors();

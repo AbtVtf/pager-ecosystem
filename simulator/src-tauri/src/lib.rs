@@ -3,14 +3,22 @@
 // SIM-001 stood up the 480x222 window. SIM-002 wires the shared
 // `pageros-renderer` crate behind a `render_vector` Tauri command so the
 // frontend can pick any PROTO-003 vector by name and display the resulting
-// PNG. The full Direct/Proxy network paths land later (SIM-004 / SIM-006).
+// PNG. SIM-003 maps host-OS keyboard activity to the canonical device
+// `InputEvent` set (QWERTY chars, encoder, ENTER, BACK) via `dispatch_input`
+// — see `input.rs` and `KEYMAP.md`. The full Direct/Proxy network paths
+// land later (SIM-004 / SIM-006).
+
+pub mod input;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use base64::Engine;
 use pageros_renderer::{decode_frame_cbor, png_export, render_frame, Framebuffer};
 use serde::Serialize;
+
+use crate::input::{map_host_key, HostKey, InputEvent};
 
 #[derive(Serialize)]
 pub struct RenderResult {
@@ -185,12 +193,52 @@ fn scan_field(raw: &str, needle: &str) -> String {
     rest[..end].to_string()
 }
 
+/// Recent device input events, oldest first. Capped at `INPUT_LOG_LIMIT` so
+/// long debug sessions don't grow unbounded. SIM-003's status-bar UI reads
+/// the tail; SIM-004's app dispatch will drain this in arrival order.
+#[derive(Default)]
+struct InputState {
+    log: Vec<InputEvent>,
+}
+
+const INPUT_LOG_LIMIT: usize = 256;
+
+/// Map a host keyboard activation to a device `InputEvent` (if any) and
+/// append it to the recent-events log. Returns the emitted event so the
+/// frontend can show feedback in the status bar — `None` means the host
+/// key has no device equivalent and was passed through.
+#[tauri::command]
+fn dispatch_input(
+    host: HostKey,
+    state: tauri::State<'_, Mutex<InputState>>,
+) -> Option<InputEvent> {
+    let event = map_host_key(&host)?;
+    let mut s = state.lock().expect("input state poisoned");
+    s.log.push(event);
+    if s.log.len() > INPUT_LOG_LIMIT {
+        let overflow = s.log.len() - INPUT_LOG_LIMIT;
+        s.log.drain(..overflow);
+    }
+    Some(event)
+}
+
+/// Recent device input events, oldest first. Used by tests and by the
+/// debug overlay; SIM-005's network panel will replace this with structured
+/// transport logging.
+#[tauri::command]
+fn recent_inputs(state: tauri::State<'_, Mutex<InputState>>) -> Vec<InputEvent> {
+    state.lock().expect("input state poisoned").log.clone()
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .manage(Mutex::new(InputState::default()))
         .invoke_handler(tauri::generate_handler![
             render_vector,
             render_cbor_hex,
-            list_vectors
+            list_vectors,
+            dispatch_input,
+            recent_inputs,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
