@@ -1,0 +1,31 @@
+{
+  "category": "widget",
+  "description": "List with two items, one with `sub` and explicit POST method (numeric tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646e7363725f6c6973745f626173696364626f647981a2617402656974656d7382a3637375626a657874726120696e666f6468726566672f6974656d2f31656c6162656c664974656d2031a36468726566672f6974656d2f32656c6162656c664974656d2032666d6574686f6464504f5354",
+  "expected_size_bytes": 120,
+  "input": {
+    "body": [
+      {
+        "items": [
+          {
+            "href": "/item/1",
+            "label": "Item 1",
+            "sub": "extra info"
+          },
+          {
+            "href": "/item/2",
+            "label": "Item 2",
+            "method": "POST"
+          }
+        ],
+        "t": 2
+      }
+    ],
+    "id": "scr_list_basic",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_list_basic_numeric",
+  "tag_form": "numeric"
+}

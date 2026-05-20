@@ -1,0 +1,103 @@
+{
+  "category": "oversized",
+  "description": "Form with 12 fields plus inline heading text",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a46176016269646d7363725f6f7665725f666f726d64626f647981a5617464666f726d66616374696f6e672f737572766579666669656c64738da36173781b506c6561736520616e7377657220616c6c207175657374696f6e7361746474657874657374796c656768656164696e67a4617465696e707574636d6178183c646e616d6563713030656c6162656c6b5175657374696f6e203030a4617465696e707574636d6178183c646e616d6563713031656c6162656c6b5175657374696f6e203031a4617465696e707574636d6178183c646e616d6563713032656c6162656c6b5175657374696f6e203032a4617465696e707574636d6178183c646e616d6563713033656c6162656c6b5175657374696f6e203033a4617465696e707574636d6178183c646e616d6563713034656c6162656c6b5175657374696f6e203034a4617465696e707574636d6178183c646e616d6563713035656c6162656c6b5175657374696f6e203035a4617465696e707574636d6178183c646e616d6563713036656c6162656c6b5175657374696f6e203036a4617465696e707574636d6178183c646e616d6563713037656c6162656c6b5175657374696f6e203037a4617465696e707574636d6178183c646e616d6563713038656c6162656c6b5175657374696f6e203038a4617465696e707574636d6178183c646e616d6563713039656c6162656c6b5175657374696f6e203039a4617465696e707574636d6178183c646e616d6563713130656c6162656c6b5175657374696f6e203130a4617465696e707574636d6178183c646e616d6563713131656c6162656c6b5175657374696f6e203131666d6574686f6464504f5354667375626d6974665375626d6974657469746c6566537572766579",
+  "expected_size_bytes": 654,
+  "input": {
+    "body": [
+      {
+        "action": "/survey",
+        "fields": [
+          {
+            "s": "Please answer all questions",
+            "style": "heading",
+            "t": "text"
+          },
+          {
+            "label": "Question 00",
+            "max": 60,
+            "name": "q00",
+            "t": "input"
+          },
+          {
+            "label": "Question 01",
+            "max": 60,
+            "name": "q01",
+            "t": "input"
+          },
+          {
+            "label": "Question 02",
+            "max": 60,
+            "name": "q02",
+            "t": "input"
+          },
+          {
+            "label": "Question 03",
+            "max": 60,
+            "name": "q03",
+            "t": "input"
+          },
+          {
+            "label": "Question 04",
+            "max": 60,
+            "name": "q04",
+            "t": "input"
+          },
+          {
+            "label": "Question 05",
+            "max": 60,
+            "name": "q05",
+            "t": "input"
+          },
+          {
+            "label": "Question 06",
+            "max": 60,
+            "name": "q06",
+            "t": "input"
+          },
+          {
+            "label": "Question 07",
+            "max": 60,
+            "name": "q07",
+            "t": "input"
+          },
+          {
+            "label": "Question 08",
+            "max": 60,
+            "name": "q08",
+            "t": "input"
+          },
+          {
+            "label": "Question 09",
+            "max": 60,
+            "name": "q09",
+            "t": "input"
+          },
+          {
+            "label": "Question 10",
+            "max": 60,
+            "name": "q10",
+            "t": "input"
+          },
+          {
+            "label": "Question 11",
+            "max": 60,
+            "name": "q11",
+            "t": "input"
+          }
+        ],
+        "method": "POST",
+        "submit": "Submit",
+        "t": "form"
+      }
+    ],
+    "id": "scr_over_form",
+    "title": "Survey",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "oversized_form",
+  "notes": "SDK MUST emit a LoRa size warning for this Frame.",
+  "tag_form": "string"
+}

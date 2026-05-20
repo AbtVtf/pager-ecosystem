@@ -1,0 +1,22 @@
+{
+  "category": "forward_compat",
+  "description": "A known widget carries an unknown field \u2014 MUST be silently ignored",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a361760162696478186677645f756e6b6e6f776e5f7769646765745f6669656c6464626f647981a36173694772656574696e6773617464746578746c6675747572655f7374796c65677261696e626f77",
+  "expected_decoded": {
+    "body": [
+      {
+        "s": "Greetings",
+        "t": "text"
+      }
+    ],
+    "id": "fwd_unknown_widget_field",
+    "v": 1
+  },
+  "expected_size_bytes": 80,
+  "input_cbor_hex": "a361760162696478186677645f756e6b6e6f776e5f7769646765745f6669656c6464626f647981a36173694772656574696e6773617464746578746c6675747572655f7374796c65677261696e626f77",
+  "kind": "decode_only",
+  "name": "forward_unknown_widget_field",
+  "notes": "Spec \u00a79.2: renderers MUST silently ignore unknown widget fields.",
+  "tag_form": "string"
+}

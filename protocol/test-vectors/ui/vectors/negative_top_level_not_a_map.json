@@ -1,0 +1,13 @@
+{
+  "category": "forward_compat",
+  "description": "Top-level CBOR value is an array, not a map \u2014 invalid Frame",
+  "encoding": "canonical_rfc8949",
+  "expect_error": "invalid_frame_shape",
+  "expected_cbor_hex": "83010203",
+  "expected_size_bytes": 4,
+  "input_cbor_hex": "83010203",
+  "kind": "negative",
+  "name": "negative_top_level_not_a_map",
+  "notes": "A Frame MUST be a CBOR map (spec \u00a74.1).",
+  "tag_form": "string"
+}

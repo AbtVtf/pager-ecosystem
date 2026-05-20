@@ -1,0 +1,26 @@
+{
+  "category": "event",
+  "description": "Bulk presence update event (numeric type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a2647479706512677061796c6f6164a2676d656d6265727382a262696468706b5f616c696365666f6e6c696e65f5a262696466706b5f626f62666f6e6c696e65f46867726f75705f6964676772705f616263",
+  "expected_size_bytes": 82,
+  "input": {
+    "payload": {
+      "group_id": "grp_abc",
+      "members": [
+        {
+          "id": "pk_alice",
+          "online": true
+        },
+        {
+          "id": "pk_bob",
+          "online": false
+        }
+      ]
+    },
+    "type": 18
+  },
+  "kind": "encode",
+  "name": "event_presence_update_numeric",
+  "tag_form": "numeric"
+}

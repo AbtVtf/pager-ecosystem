@@ -1,0 +1,18 @@
+{
+  "category": "event",
+  "description": "GPS fix update event (numeric type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a2647479706502677061796c6f6164a3636c6174fa42360000636c6f6efbc052666666666666686163637572616379fa41400000",
+  "expected_size_bytes": 52,
+  "input": {
+    "payload": {
+      "accuracy": 12.0,
+      "lat": 45.5,
+      "lon": -73.6
+    },
+    "type": 2
+  },
+  "kind": "encode",
+  "name": "event_location_numeric",
+  "tag_form": "numeric"
+}

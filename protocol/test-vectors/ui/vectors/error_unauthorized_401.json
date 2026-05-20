@@ -1,0 +1,21 @@
+{
+  "category": "error",
+  "description": "Sign-in required frame after second 401",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a4617601626964676572725f34303164626f647981a26173705369676e2d696e20726571756972656461746474657874657469746c65675369676e2d696e",
+  "expected_size_bytes": 62,
+  "input": {
+    "body": [
+      {
+        "s": "Sign-in required",
+        "t": "text"
+      }
+    ],
+    "id": "err_401",
+    "title": "Sign-in",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_unauthorized_401",
+  "tag_form": "string"
+}

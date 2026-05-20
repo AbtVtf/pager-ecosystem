@@ -1,0 +1,17 @@
+{
+  "category": "event",
+  "description": "Group member left event (string type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a264747970656b6d656d6265725f6c656674677061796c6f6164a26867726f75705f6964676772705f616263696d656d6265725f696466706b5f626f62",
+  "expected_size_bytes": 61,
+  "input": {
+    "payload": {
+      "group_id": "grp_abc",
+      "member_id": "pk_bob"
+    },
+    "type": "member_left"
+  },
+  "kind": "encode",
+  "name": "event_member_left_string",
+  "tag_form": "string"
+}

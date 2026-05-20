@@ -1,0 +1,21 @@
+{
+  "category": "error",
+  "description": "Gone response \u2014 evicts cache for this screen id",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964676572725f34313064626f647981a261736752656d6f76656461746474657874",
+  "expected_size_bytes": 39,
+  "input": {
+    "body": [
+      {
+        "s": "Removed",
+        "t": "text"
+      }
+    ],
+    "id": "err_410",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_gone_410",
+  "notes": "Device evicts cached Screens for this (app, screen_id) on 410.",
+  "tag_form": "string"
+}

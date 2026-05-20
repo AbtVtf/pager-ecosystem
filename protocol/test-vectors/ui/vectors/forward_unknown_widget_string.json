@@ -1,0 +1,33 @@
+{
+  "category": "forward_compat",
+  "description": "Body contains an unknown string-form widget tag between two known widgets",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964726677645f737472696e675f756e6b6e6f776e64626f647983a26173666265666f726561746474657874a261746c66757475726577696467657464646174616178a2617365616674657261746474657874",
+  "expected_decoded": {
+    "body": [
+      {
+        "s": "before",
+        "t": "text"
+      },
+      {
+        "$render_placeholder": "[unsupported: futurewidget]",
+        "raw_widget": {
+          "data": "x",
+          "t": "futurewidget"
+        }
+      },
+      {
+        "s": "after",
+        "t": "text"
+      }
+    ],
+    "id": "fwd_string_unknown",
+    "v": 1
+  },
+  "expected_size_bytes": 88,
+  "input_cbor_hex": "a3617601626964726677645f737472696e675f756e6b6e6f776e64626f647983a26173666265666f726561746474657874a261746c66757475726577696467657464646174616178a2617365616674657261746474657874",
+  "kind": "decode_only",
+  "name": "forward_unknown_widget_string",
+  "notes": "Renderer MUST emit '[unsupported: futurewidget]' and continue.",
+  "tag_form": "string"
+}

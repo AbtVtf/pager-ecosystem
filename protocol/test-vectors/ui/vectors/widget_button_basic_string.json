@@ -1,0 +1,21 @@
+{
+  "category": "widget",
+  "description": "Plain button with GET (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964677363725f62746e64626f647981a3617466627574746f6e6468726566682f6f70656e2f3432656c6162656c644f70656e",
+  "expected_size_bytes": 56,
+  "input": {
+    "body": [
+      {
+        "href": "/open/42",
+        "label": "Open",
+        "t": "button"
+      }
+    ],
+    "id": "scr_btn",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_button_basic_string",
+  "tag_form": "string"
+}

@@ -1,0 +1,23 @@
+{
+  "category": "widget",
+  "description": "Image with display dimensions and alt text (numeric tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646e7363725f696d6167655f66756c6c64626f647981a5616818606174066177186063616c74646c6f676f637372637844696d673a61626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162",
+  "expected_size_bytes": 123,
+  "input": {
+    "body": [
+      {
+        "alt": "logo",
+        "h": 96,
+        "src": "img:abababababababababababababababababababababababababababababababab",
+        "t": 6,
+        "w": 96
+      }
+    ],
+    "id": "scr_image_full",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_image_full_numeric",
+  "tag_form": "numeric"
+}

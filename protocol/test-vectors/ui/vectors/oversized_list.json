@@ -1,0 +1,142 @@
+{
+  "category": "oversized",
+  "description": "List frame with 24 items \u2014 exceeds the 200B LoRa budget",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646d7363725f6f7665725f6c69737464626f647981a26174646c697374656974656d739818a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f30656c6162656c674974656d203030a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f31656c6162656c674974656d203031a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f32656c6162656c674974656d203032a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f33656c6162656c674974656d203033a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f34656c6162656c674974656d203034a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f35656c6162656c674974656d203035a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f36656c6162656c674974656d203036a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f37656c6162656c674974656d203037a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f38656c6162656c674974656d203038a363737562737365636f6e6461727920696e666f206c696e656468726566672f6974656d2f39656c6162656c674974656d203039a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3130656c6162656c674974656d203130a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3131656c6162656c674974656d203131a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3132656c6162656c674974656d203132a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3133656c6162656c674974656d203133a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3134656c6162656c674974656d203134a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3135656c6162656c674974656d203135a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3136656c6162656c674974656d203136a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3137656c6162656c674974656d203137a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3138656c6162656c674974656d203138a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3139656c6162656c674974656d203139a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3230656c6162656c674974656d203230a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3231656c6162656c674974656d203231a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3232656c6162656c674974656d203232a363737562737365636f6e6461727920696e666f206c696e656468726566682f6974656d2f3233656c6162656c674974656d203233",
+  "expected_size_bytes": 1305,
+  "input": {
+    "body": [
+      {
+        "items": [
+          {
+            "href": "/item/0",
+            "label": "Item 00",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/1",
+            "label": "Item 01",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/2",
+            "label": "Item 02",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/3",
+            "label": "Item 03",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/4",
+            "label": "Item 04",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/5",
+            "label": "Item 05",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/6",
+            "label": "Item 06",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/7",
+            "label": "Item 07",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/8",
+            "label": "Item 08",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/9",
+            "label": "Item 09",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/10",
+            "label": "Item 10",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/11",
+            "label": "Item 11",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/12",
+            "label": "Item 12",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/13",
+            "label": "Item 13",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/14",
+            "label": "Item 14",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/15",
+            "label": "Item 15",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/16",
+            "label": "Item 16",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/17",
+            "label": "Item 17",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/18",
+            "label": "Item 18",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/19",
+            "label": "Item 19",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/20",
+            "label": "Item 20",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/21",
+            "label": "Item 21",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/22",
+            "label": "Item 22",
+            "sub": "secondary info line"
+          },
+          {
+            "href": "/item/23",
+            "label": "Item 23",
+            "sub": "secondary info line"
+          }
+        ],
+        "t": "list"
+      }
+    ],
+    "id": "scr_over_list",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "oversized_list",
+  "notes": "SDK MUST emit a LoRa size warning for this Frame.",
+  "tag_form": "string"
+}

@@ -1,0 +1,21 @@
+{
+  "category": "error",
+  "description": "Rate-limited response with transient notification",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964676572725f34323964626f647981a361737820536c6f7720646f776e20e280942074727920616761696e2073686f72746c792e61746c6e6f74696669636174696f6e656c6576656c647761726e",
+  "expected_size_bytes": 84,
+  "input": {
+    "body": [
+      {
+        "level": "warn",
+        "s": "Slow down \u2014 try again shortly.",
+        "t": "notification"
+      }
+    ],
+    "id": "err_429",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_rate_limited_429",
+  "tag_form": "string"
+}

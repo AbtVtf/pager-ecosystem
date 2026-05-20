@@ -1,0 +1,38 @@
+{
+  "category": "widget",
+  "description": "Text widget with every defined style value, one per body entry (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a46176016269646f7363725f746578745f7374796c657364626f647984a361736c48656164696e67206c696e6561746474657874657374796c656768656164696e67a3617369426f6479206c696e6561746474657874657374796c6564626f6479a361736844696d206c696e6561746474657874657374796c656364696da36173694d6f6e6f206c696e6561746474657874657374796c65646d6f6e6f657469746c65665374796c6573",
+  "expected_size_bytes": 170,
+  "input": {
+    "body": [
+      {
+        "s": "Heading line",
+        "style": "heading",
+        "t": "text"
+      },
+      {
+        "s": "Body line",
+        "style": "body",
+        "t": "text"
+      },
+      {
+        "s": "Dim line",
+        "style": "dim",
+        "t": "text"
+      },
+      {
+        "s": "Mono line",
+        "style": "mono",
+        "t": "text"
+      }
+    ],
+    "id": "scr_text_styles",
+    "title": "Styles",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_text_styled_string",
+  "notes": "Covers spec \u00a75.1: style enum body|heading|dim|mono.",
+  "tag_form": "string"
+}

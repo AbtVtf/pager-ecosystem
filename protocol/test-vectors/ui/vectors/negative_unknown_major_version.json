@@ -1,0 +1,13 @@
+{
+  "category": "forward_compat",
+  "description": "Frame declares an unknown major version \u2014 device MUST reject",
+  "encoding": "canonical_rfc8949",
+  "expect_error": "unknown_major_version",
+  "expected_cbor_hex": "a3617618636269646a7363725f66757475726564626f647981a261736866726f6d2076393961746474657874",
+  "expected_size_bytes": 44,
+  "input_cbor_hex": "a3617618636269646a7363725f66757475726564626f647981a261736866726f6d2076393961746474657874",
+  "kind": "negative",
+  "name": "negative_unknown_major_version",
+  "notes": "Spec \u00a74.1.1 / \u00a79.1: devices MUST reject unknown major versions with a graceful error frame.",
+  "tag_form": "string"
+}

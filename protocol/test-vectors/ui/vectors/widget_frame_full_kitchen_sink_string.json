@@ -1,0 +1,56 @@
+{
+  "category": "widget",
+  "description": "End-to-end Frame: title, multi-widget body, actions, subscribe set (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a8617601626964687363725f66756c6c6374746c183c64626f647983a361737257656c636f6d6520746f2050616765724f5361746474657874657374796c656768656164696e67a26174646c697374656974656d7382a26468726566662f6e6f746573656c6162656c654e6f746573a26468726566642f6d6170656c6162656c634d6170a4617466627574746f6e6468726566652f73796e63656c6162656c6453796e63666d6574686f6464504f5354646d657461a16c7469636b5f7365636f6e6473181e657469746c6564486f6d6567616374696f6e7381a3636b657961686468726566652f68656c70656c6162656c6448656c706973756273637269626582686e66635f7363616e686c6f636174696f6e",
+  "expected_size_bytes": 275,
+  "input": {
+    "actions": [
+      {
+        "href": "/help",
+        "key": "h",
+        "label": "Help"
+      }
+    ],
+    "body": [
+      {
+        "s": "Welcome to PagerOS",
+        "style": "heading",
+        "t": "text"
+      },
+      {
+        "items": [
+          {
+            "href": "/notes",
+            "label": "Notes"
+          },
+          {
+            "href": "/map",
+            "label": "Map"
+          }
+        ],
+        "t": "list"
+      },
+      {
+        "href": "/sync",
+        "label": "Sync",
+        "method": "POST",
+        "t": "button"
+      }
+    ],
+    "id": "scr_full",
+    "meta": {
+      "tick_seconds": 30
+    },
+    "subscribe": [
+      "nfc_scan",
+      "location"
+    ],
+    "title": "Home",
+    "ttl": 60,
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_frame_full_kitchen_sink_string",
+  "tag_form": "string"
+}

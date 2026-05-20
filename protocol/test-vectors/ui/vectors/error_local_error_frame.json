@@ -1,0 +1,24 @@
+{
+  "category": "error",
+  "description": "Locally-generated error frame (no usable server response), per \u00a77.4.1",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a5617601626964696572725f6c6f63616c6374746c0064626f647981a36173734e6574776f726b20756e726561636861626c6561746474657874657374796c65656572726f72657469746c65654572726f72",
+  "expected_size_bytes": 82,
+  "input": {
+    "body": [
+      {
+        "s": "Network unreachable",
+        "style": "error",
+        "t": "text"
+      }
+    ],
+    "id": "err_local",
+    "title": "Error",
+    "ttl": 0,
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_local_error_frame",
+  "notes": "style: 'error' is renderer-only. Servers MUST NOT emit it; the local renderer uses it to flag a self-built error frame.",
+  "tag_form": "string"
+}

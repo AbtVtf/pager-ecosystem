@@ -1,0 +1,20 @@
+{
+  "category": "widget",
+  "description": "Info-level notification (default level) (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646e7363725f6e6f7469665f696e666f64626f647981a261736653617665642e61746c6e6f74696669636174696f6e",
+  "expected_size_bytes": 53,
+  "input": {
+    "body": [
+      {
+        "s": "Saved.",
+        "t": "notification"
+      }
+    ],
+    "id": "scr_notif_info",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_notification_info_string",
+  "tag_form": "string"
+}

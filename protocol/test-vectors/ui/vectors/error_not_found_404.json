@@ -1,0 +1,20 @@
+{
+  "category": "error",
+  "description": "Plain 404 response frame",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964676572725f34303464626f647981a26173694e6f7420666f756e6461746474657874",
+  "expected_size_bytes": 41,
+  "input": {
+    "body": [
+      {
+        "s": "Not found",
+        "t": "text"
+      }
+    ],
+    "id": "err_404",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_not_found_404",
+  "tag_form": "string"
+}

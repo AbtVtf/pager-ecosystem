@@ -1,0 +1,16 @@
+{
+  "category": "event",
+  "description": "User taps a notification (numeric type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a2647479706505677061796c6f6164a1626964686e6f7469665f3432",
+  "expected_size_bytes": 28,
+  "input": {
+    "payload": {
+      "id": "notif_42"
+    },
+    "type": 5
+  },
+  "kind": "encode",
+  "name": "event_notification_action_numeric",
+  "tag_form": "numeric"
+}

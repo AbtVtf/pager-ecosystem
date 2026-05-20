@@ -1,0 +1,19 @@
+{
+  "category": "event",
+  "description": "New chat message event (numeric type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a2647479706513677061796c6f6164a46173696261636b20736f6f6e6274731a664b225e6466726f6d65616c6963656867726f75705f6964676772705f616263",
+  "expected_size_bytes": 64,
+  "input": {
+    "payload": {
+      "from": "alice",
+      "group_id": "grp_abc",
+      "s": "back soon",
+      "ts": 1716200030
+    },
+    "type": 19
+  },
+  "kind": "encode",
+  "name": "event_group_message_numeric",
+  "tag_form": "numeric"
+}

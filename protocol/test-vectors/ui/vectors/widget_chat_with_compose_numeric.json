@@ -1,0 +1,39 @@
+{
+  "category": "widget",
+  "description": "Chat widget with two messages and an inline composer (numeric tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a4617601626964687363725f6368617464626f647981a461740a67636f6d706f7365a2646e616d65636d7367667375626d6974652f73656e646867726f75705f6964676772705f616263686d6573736167657382a361736268696274731a664b22406466726f6d65616c696365a3617362796f6274731a664b224c6466726f6d63626f62707375627363726962655f67726f75707381676772705f616263",
+  "expected_size_bytes": 158,
+  "input": {
+    "body": [
+      {
+        "compose": {
+          "name": "msg",
+          "submit": "/send"
+        },
+        "group_id": "grp_abc",
+        "messages": [
+          {
+            "from": "alice",
+            "s": "hi",
+            "ts": 1716200000
+          },
+          {
+            "from": "bob",
+            "s": "yo",
+            "ts": 1716200012
+          }
+        ],
+        "t": 10
+      }
+    ],
+    "id": "scr_chat",
+    "subscribe_groups": [
+      "grp_abc"
+    ],
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_chat_with_compose_numeric",
+  "tag_form": "numeric"
+}

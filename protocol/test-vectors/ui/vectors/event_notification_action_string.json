@@ -1,0 +1,16 @@
+{
+  "category": "event",
+  "description": "User taps a notification (string type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a26474797065736e6f74696669636174696f6e5f616374696f6e677061796c6f6164a1626964686e6f7469665f3432",
+  "expected_size_bytes": 47,
+  "input": {
+    "payload": {
+      "id": "notif_42"
+    },
+    "type": "notification_action"
+  },
+  "kind": "encode",
+  "name": "event_notification_action_string",
+  "tag_form": "string"
+}

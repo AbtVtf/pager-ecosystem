@@ -1,0 +1,35 @@
+{
+  "category": "widget",
+  "description": "Presence list with two members, mixed online state (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a46176016269646c7363725f70726573656e636564626f647981a361746d70726573656e63655f6c697374676d656d6265727382a362696468706b5f616c696365646e616d6565616c696365666f6e6c696e65f5a362696466706b5f626f62646e616d6563626f62666f6e6c696e65f46867726f75705f6964676772705f616263707375627363726962655f67726f75707381676772705f616263",
+  "expected_size_bytes": 155,
+  "input": {
+    "body": [
+      {
+        "group_id": "grp_abc",
+        "members": [
+          {
+            "id": "pk_alice",
+            "name": "alice",
+            "online": true
+          },
+          {
+            "id": "pk_bob",
+            "name": "bob",
+            "online": false
+          }
+        ],
+        "t": "presence_list"
+      }
+    ],
+    "id": "scr_presence",
+    "subscribe_groups": [
+      "grp_abc"
+    ],
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_presence_list_string",
+  "tag_form": "string"
+}

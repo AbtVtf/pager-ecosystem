@@ -1,0 +1,20 @@
+{
+  "category": "error",
+  "description": "Forbidden frame with descriptive text",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964676572725f34303364626f647981a26173781b596f7520646f206e6f742068617665207065726d697373696f6e2e61746474657874",
+  "expected_size_bytes": 60,
+  "input": {
+    "body": [
+      {
+        "s": "You do not have permission.",
+        "t": "text"
+      }
+    ],
+    "id": "err_403",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_forbidden_403",
+  "tag_form": "string"
+}

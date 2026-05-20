@@ -1,0 +1,25 @@
+{
+  "category": "forward_compat",
+  "description": "Widget tag 64 \u2014 reserved for on-device runtime (registry \u00a75.1)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964716677645f72756e74696d655f72616e676564626f647981a26174184064626c6f6243010203",
+  "expected_decoded": {
+    "body": [
+      {
+        "$render_placeholder": "[unsupported: 64]",
+        "raw_widget": {
+          "blob": "$bytes:010203",
+          "t": 64
+        }
+      }
+    ],
+    "id": "fwd_runtime_range",
+    "v": 1
+  },
+  "expected_size_bytes": 45,
+  "input_cbor_hex": "a3617601626964716677645f72756e74696d655f72616e676564626f647981a26174184064626c6f6243010203",
+  "kind": "decode_only",
+  "name": "forward_unknown_widget_runtime_numeric",
+  "notes": "Tags 64-127 are reserved for the v2 on-device runtime; v1 implementations MUST decode but treat as unknown.",
+  "tag_form": "numeric"
+}

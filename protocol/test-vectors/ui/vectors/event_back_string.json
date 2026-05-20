@@ -1,0 +1,14 @@
+{
+  "category": "event",
+  "description": "BACK key event (empty payload) (string type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a26474797065646261636b677061796c6f6164a0",
+  "expected_size_bytes": 20,
+  "input": {
+    "payload": {},
+    "type": "back"
+  },
+  "kind": "encode",
+  "name": "event_back_string",
+  "tag_form": "string"
+}

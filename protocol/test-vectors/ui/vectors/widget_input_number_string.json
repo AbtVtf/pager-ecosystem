@@ -1,0 +1,23 @@
+{
+  "category": "widget",
+  "description": "Number input \u2014 exercises non-default type and integer value (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646d7363725f696e7075745f6e756d64626f647981a5617465696e707574646e616d65637174796474797065666e756d626572656c6162656c685175616e746974796576616c75656131",
+  "expected_size_bytes": 80,
+  "input": {
+    "body": [
+      {
+        "label": "Quantity",
+        "name": "qty",
+        "t": "input",
+        "type": "number",
+        "value": "1"
+      }
+    ],
+    "id": "scr_input_num",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_input_number_string",
+  "tag_form": "string"
+}

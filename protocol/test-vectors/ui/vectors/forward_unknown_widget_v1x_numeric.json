@@ -1,0 +1,29 @@
+{
+  "category": "forward_compat",
+  "description": "Body contains an unknown numeric widget tag in the v1.x reserved range (11)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964766677645f7631785f756e6b6e6f776e5f77696467657464626f647982a261736548656c6c6f61746474657874a261740b617801",
+  "expected_decoded": {
+    "body": [
+      {
+        "s": "Hello",
+        "t": "text"
+      },
+      {
+        "$render_placeholder": "[unsupported: 11]",
+        "raw_widget": {
+          "t": 11,
+          "x": 1
+        }
+      }
+    ],
+    "id": "fwd_v1x_unknown_widget",
+    "v": 1
+  },
+  "expected_size_bytes": 59,
+  "input_cbor_hex": "a3617601626964766677645f7631785f756e6b6e6f776e5f77696467657464626f647982a261736548656c6c6f61746474657874a261740b617801",
+  "kind": "decode_only",
+  "name": "forward_unknown_widget_v1x_numeric",
+  "notes": "Renderer MUST render '[unsupported: 11]' and continue rendering the rest of body (spec \u00a74.2).",
+  "tag_form": "mixed"
+}

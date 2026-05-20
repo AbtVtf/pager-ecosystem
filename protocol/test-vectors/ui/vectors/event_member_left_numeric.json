@@ -1,0 +1,17 @@
+{
+  "category": "event",
+  "description": "Group member left event (numeric type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a2647479706511677061796c6f6164a26867726f75705f6964676772705f616263696d656d6265725f696466706b5f626f62",
+  "expected_size_bytes": 50,
+  "input": {
+    "payload": {
+      "group_id": "grp_abc",
+      "member_id": "pk_bob"
+    },
+    "type": 17
+  },
+  "kind": "encode",
+  "name": "event_member_left_numeric",
+  "tag_form": "numeric"
+}

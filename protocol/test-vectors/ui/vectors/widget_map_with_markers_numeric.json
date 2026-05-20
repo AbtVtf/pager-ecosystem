@@ -1,0 +1,33 @@
+{
+  "category": "widget",
+  "description": "Map with explicit zoom and two markers (numeric tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646f7363725f6d61705f6d61726b65727364626f647981a5617407636c6174fa42360000636c6f6efbc052666666666666647a6f6f6d0e676d61726b65727382a3636c6174fb4046c147ae147ae1636c6f6efbc052670a3d70a3d7656c6162656c6141a2636c6174fb4046beb851eb851f636c6f6efbc05265c28f5c28f6",
+  "expected_size_bytes": 132,
+  "input": {
+    "body": [
+      {
+        "lat": 45.5,
+        "lon": -73.6,
+        "markers": [
+          {
+            "label": "A",
+            "lat": 45.51,
+            "lon": -73.61
+          },
+          {
+            "lat": 45.49,
+            "lon": -73.59
+          }
+        ],
+        "t": 7,
+        "zoom": 14
+      }
+    ],
+    "id": "scr_map_markers",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_map_with_markers_numeric",
+  "tag_form": "numeric"
+}

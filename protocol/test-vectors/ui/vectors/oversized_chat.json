@@ -1,0 +1,66 @@
+{
+  "category": "oversized",
+  "description": "Chat frame with 8 ~50-byte messages \u2014 far over the 200B LoRa budget",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a46176016269646d7363725f6f7665725f6368617464626f647981a3617464636861746867726f75705f6964676772705f626967686d6573736167657388a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22406466726f6d65616c696365a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22416466726f6d65616c696365a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22426466726f6d65616c696365a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22436466726f6d65616c696365a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22446466726f6d65616c696365a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22456466726f6d65616c696365a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22466466726f6d65616c696365a3617378334c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e73656374657475722061646970697363696e672e6274731a664b22476466726f6d65616c696365707375627363726962655f67726f75707381676772705f626967",
+  "expected_size_bytes": 688,
+  "input": {
+    "body": [
+      {
+        "group_id": "grp_big",
+        "messages": [
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200000
+          },
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200001
+          },
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200002
+          },
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200003
+          },
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200004
+          },
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200005
+          },
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200006
+          },
+          {
+            "from": "alice",
+            "s": "Lorem ipsum dolor sit amet, consectetur adipiscing.",
+            "ts": 1716200007
+          }
+        ],
+        "t": "chat"
+      }
+    ],
+    "id": "scr_over_chat",
+    "subscribe_groups": [
+      "grp_big"
+    ],
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "oversized_chat",
+  "notes": "SDK MUST emit a LoRa size warning (PY-011 hook) for this Frame.",
+  "tag_form": "string"
+}

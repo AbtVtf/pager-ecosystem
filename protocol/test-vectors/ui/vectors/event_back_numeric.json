@@ -1,0 +1,14 @@
+{
+  "category": "event",
+  "description": "BACK key event (empty payload) (numeric type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a2647479706503677061796c6f6164a0",
+  "expected_size_bytes": 16,
+  "input": {
+    "payload": {},
+    "type": 3
+  },
+  "kind": "encode",
+  "name": "event_back_numeric",
+  "tag_form": "numeric"
+}

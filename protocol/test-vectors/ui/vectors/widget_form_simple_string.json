@@ -1,0 +1,32 @@
+{
+  "category": "widget",
+  "description": "Two-field form with default method/submit label (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646f7363725f666f726d5f73696d706c6564626f647981a3617464666f726d66616374696f6e652f73617665666669656c647382a3617465696e707574646e616d65657469746c65656c6162656c655469746c65a3617465696e707574646e616d6564626f6479656c6162656c64426f6479",
+  "expected_size_bytes": 120,
+  "input": {
+    "body": [
+      {
+        "action": "/save",
+        "fields": [
+          {
+            "label": "Title",
+            "name": "title",
+            "t": "input"
+          },
+          {
+            "label": "Body",
+            "name": "body",
+            "t": "input"
+          }
+        ],
+        "t": "form"
+      }
+    ],
+    "id": "scr_form_simple",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_form_simple_string",
+  "tag_form": "string"
+}

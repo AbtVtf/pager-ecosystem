@@ -1,0 +1,13 @@
+{
+  "category": "forward_compat",
+  "description": "Inbound server\u2192device event with unknown type \u2014 device MUST drop",
+  "encoding": "canonical_rfc8949",
+  "expect_error": "unknown_event_dropped",
+  "expected_cbor_hex": "a26474797065726675747572655f67726f75705f6576656e74677061796c6f6164a1617801",
+  "expected_size_bytes": 37,
+  "input_cbor_hex": "a26474797065726675747572655f67726f75705f6576656e74677061796c6f6164a1617801",
+  "kind": "negative",
+  "name": "forward_unknown_event_payload",
+  "notes": "Spec \u00a76.3: inbound events with unknown type are dropped (not surfaced as user errors).",
+  "tag_form": "string"
+}

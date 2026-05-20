@@ -1,0 +1,23 @@
+{
+  "category": "forward_compat",
+  "description": "Frame contains an unknown top-level field \u2014 MUST be silently ignored",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a5617601626964756677645f756e6b6e6f776e5f746f705f6669656c6464626f647981a2617362486961746474657874657469746c65624f4b74756e6b6e6f776e5f6675747572655f6669656c64a16568656c6c6f65776f726c64",
+  "expected_decoded": {
+    "body": [
+      {
+        "s": "Hi",
+        "t": "text"
+      }
+    ],
+    "id": "fwd_unknown_top_field",
+    "title": "OK",
+    "v": 1
+  },
+  "expected_size_bytes": 91,
+  "input_cbor_hex": "a5617601626964756677645f756e6b6e6f776e5f746f705f6669656c6464626f647981a2617362486961746474657874657469746c65624f4b74756e6b6e6f776e5f6675747572655f6669656c64a16568656c6c6f65776f726c64",
+  "kind": "decode_only",
+  "name": "forward_unknown_top_level_field",
+  "notes": "Spec \u00a79.2: renderers MUST silently ignore unknown top-level Frame fields.",
+  "tag_form": "string"
+}

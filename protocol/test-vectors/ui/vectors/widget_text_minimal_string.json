@@ -1,0 +1,20 @@
+{
+  "category": "widget",
+  "description": "Minimal text widget (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646c7363725f746578745f6d696e64626f647981a261736c48656c6c6f2c20776f726c6461746474657874",
+  "expected_size_bytes": 49,
+  "input": {
+    "body": [
+      {
+        "s": "Hello, world",
+        "t": "text"
+      }
+    ],
+    "id": "scr_text_min",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_text_minimal_string",
+  "tag_form": "string"
+}

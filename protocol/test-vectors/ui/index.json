@@ -1,0 +1,981 @@
+{
+  "version": "1.0",
+  "spec": "protocol/spec.md (PROTO-002), protocol/tag-registry.md (PROTO-001)",
+  "encoding": "canonical_rfc8949",
+  "generator": "protocol/test-vectors/ui/generate.py",
+  "categories": [
+    "error",
+    "event",
+    "forward_compat",
+    "oversized",
+    "widget"
+  ],
+  "kinds": [
+    "decode_only",
+    "encode",
+    "negative"
+  ],
+  "count": 80,
+  "vectors": [
+    {
+      "name": "widget_text_minimal_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Minimal text widget (string tags)",
+      "size_bytes": 49,
+      "files": {
+        "descriptor": "vectors/widget_text_minimal_string.json",
+        "cbor": "vectors/widget_text_minimal_string.cbor"
+      }
+    },
+    {
+      "name": "widget_text_minimal_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Minimal text widget (numeric tags)",
+      "size_bytes": 45,
+      "files": {
+        "descriptor": "vectors/widget_text_minimal_numeric.json",
+        "cbor": "vectors/widget_text_minimal_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_text_styled_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Text widget with every defined style value, one per body entry (string tags)",
+      "size_bytes": 170,
+      "files": {
+        "descriptor": "vectors/widget_text_styled_string.json",
+        "cbor": "vectors/widget_text_styled_string.cbor"
+      }
+    },
+    {
+      "name": "widget_text_styled_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Text widget with every defined style value, one per body entry (numeric tags)",
+      "size_bytes": 154,
+      "files": {
+        "descriptor": "vectors/widget_text_styled_numeric.json",
+        "cbor": "vectors/widget_text_styled_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_list_empty_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Empty list widget \u2014 renders as dim 'empty' placeholder (string tags)",
+      "size_bytes": 43,
+      "files": {
+        "descriptor": "vectors/widget_list_empty_string.json",
+        "cbor": "vectors/widget_list_empty_string.cbor"
+      }
+    },
+    {
+      "name": "widget_list_empty_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Empty list widget \u2014 renders as dim 'empty' placeholder (numeric tags)",
+      "size_bytes": 39,
+      "files": {
+        "descriptor": "vectors/widget_list_empty_numeric.json",
+        "cbor": "vectors/widget_list_empty_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_list_basic_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "List with two items, one with `sub` and explicit POST method (string tags)",
+      "size_bytes": 124,
+      "files": {
+        "descriptor": "vectors/widget_list_basic_string.json",
+        "cbor": "vectors/widget_list_basic_string.cbor"
+      }
+    },
+    {
+      "name": "widget_list_basic_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "List with two items, one with `sub` and explicit POST method (numeric tags)",
+      "size_bytes": 120,
+      "files": {
+        "descriptor": "vectors/widget_list_basic_numeric.json",
+        "cbor": "vectors/widget_list_basic_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_input_text_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Standalone text input with max length (string tags)",
+      "size_bytes": 83,
+      "files": {
+        "descriptor": "vectors/widget_input_text_string.json",
+        "cbor": "vectors/widget_input_text_string.cbor"
+      }
+    },
+    {
+      "name": "widget_input_text_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Standalone text input with max length (numeric tags)",
+      "size_bytes": 78,
+      "files": {
+        "descriptor": "vectors/widget_input_text_numeric.json",
+        "cbor": "vectors/widget_input_text_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_input_number_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Number input \u2014 exercises non-default type and integer value (string tags)",
+      "size_bytes": 80,
+      "files": {
+        "descriptor": "vectors/widget_input_number_string.json",
+        "cbor": "vectors/widget_input_number_string.cbor"
+      }
+    },
+    {
+      "name": "widget_input_number_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Number input \u2014 exercises non-default type and integer value (numeric tags)",
+      "size_bytes": 75,
+      "files": {
+        "descriptor": "vectors/widget_input_number_numeric.json",
+        "cbor": "vectors/widget_input_number_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_form_simple_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Two-field form with default method/submit label (string tags)",
+      "size_bytes": 120,
+      "files": {
+        "descriptor": "vectors/widget_form_simple_string.json",
+        "cbor": "vectors/widget_form_simple_string.cbor"
+      }
+    },
+    {
+      "name": "widget_form_simple_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Two-field form with default method/submit label (numeric tags)",
+      "size_bytes": 106,
+      "files": {
+        "descriptor": "vectors/widget_form_simple_numeric.json",
+        "cbor": "vectors/widget_form_simple_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_form_full_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Form with heading text between fields, explicit method and submit (string tags)",
+      "size_bytes": 211,
+      "files": {
+        "descriptor": "vectors/widget_form_full_string.json",
+        "cbor": "vectors/widget_form_full_string.cbor"
+      }
+    },
+    {
+      "name": "widget_form_full_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Form with heading text between fields, explicit method and submit (numeric tags)",
+      "size_bytes": 193,
+      "files": {
+        "descriptor": "vectors/widget_form_full_numeric.json",
+        "cbor": "vectors/widget_form_full_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_button_basic_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Plain button with GET (string tags)",
+      "size_bytes": 56,
+      "files": {
+        "descriptor": "vectors/widget_button_basic_string.json",
+        "cbor": "vectors/widget_button_basic_string.cbor"
+      }
+    },
+    {
+      "name": "widget_button_basic_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Plain button with GET (numeric tags)",
+      "size_bytes": 50,
+      "files": {
+        "descriptor": "vectors/widget_button_basic_numeric.json",
+        "cbor": "vectors/widget_button_basic_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_button_confirm_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Destructive POST button with confirmation prompt (string tags)",
+      "size_bytes": 102,
+      "files": {
+        "descriptor": "vectors/widget_button_confirm_string.json",
+        "cbor": "vectors/widget_button_confirm_string.cbor"
+      }
+    },
+    {
+      "name": "widget_button_confirm_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Destructive POST button with confirmation prompt (numeric tags)",
+      "size_bytes": 96,
+      "files": {
+        "descriptor": "vectors/widget_button_confirm_numeric.json",
+        "cbor": "vectors/widget_button_confirm_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_image_minimal_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Image with just `src` (string tags)",
+      "size_bytes": 110,
+      "files": {
+        "descriptor": "vectors/widget_image_minimal_string.json",
+        "cbor": "vectors/widget_image_minimal_string.cbor"
+      }
+    },
+    {
+      "name": "widget_image_minimal_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Image with just `src` (numeric tags)",
+      "size_bytes": 105,
+      "files": {
+        "descriptor": "vectors/widget_image_minimal_numeric.json",
+        "cbor": "vectors/widget_image_minimal_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_image_full_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Image with display dimensions and alt text (string tags)",
+      "size_bytes": 128,
+      "files": {
+        "descriptor": "vectors/widget_image_full_string.json",
+        "cbor": "vectors/widget_image_full_string.cbor"
+      }
+    },
+    {
+      "name": "widget_image_full_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Image with display dimensions and alt text (numeric tags)",
+      "size_bytes": 123,
+      "files": {
+        "descriptor": "vectors/widget_image_full_numeric.json",
+        "cbor": "vectors/widget_image_full_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_map_minimal_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Map with center only (string tags)",
+      "size_bytes": 54,
+      "files": {
+        "descriptor": "vectors/widget_map_minimal_string.json",
+        "cbor": "vectors/widget_map_minimal_string.cbor"
+      }
+    },
+    {
+      "name": "widget_map_minimal_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Map with center only (numeric tags)",
+      "size_bytes": 51,
+      "files": {
+        "descriptor": "vectors/widget_map_minimal_numeric.json",
+        "cbor": "vectors/widget_map_minimal_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_map_with_markers_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Map with explicit zoom and two markers (string tags)",
+      "size_bytes": 135,
+      "files": {
+        "descriptor": "vectors/widget_map_with_markers_string.json",
+        "cbor": "vectors/widget_map_with_markers_string.cbor"
+      }
+    },
+    {
+      "name": "widget_map_with_markers_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Map with explicit zoom and two markers (numeric tags)",
+      "size_bytes": 132,
+      "files": {
+        "descriptor": "vectors/widget_map_with_markers_numeric.json",
+        "cbor": "vectors/widget_map_with_markers_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_notification_info_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Info-level notification (default level) (string tags)",
+      "size_bytes": 53,
+      "files": {
+        "descriptor": "vectors/widget_notification_info_string.json",
+        "cbor": "vectors/widget_notification_info_string.cbor"
+      }
+    },
+    {
+      "name": "widget_notification_info_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Info-level notification (default level) (numeric tags)",
+      "size_bytes": 41,
+      "files": {
+        "descriptor": "vectors/widget_notification_info_numeric.json",
+        "cbor": "vectors/widget_notification_info_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_notification_error_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Error-level notification with explicit level (string tags)",
+      "size_bytes": 73,
+      "files": {
+        "descriptor": "vectors/widget_notification_error_string.json",
+        "cbor": "vectors/widget_notification_error_string.cbor"
+      }
+    },
+    {
+      "name": "widget_notification_error_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Error-level notification with explicit level (numeric tags)",
+      "size_bytes": 61,
+      "files": {
+        "descriptor": "vectors/widget_notification_error_numeric.json",
+        "cbor": "vectors/widget_notification_error_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_presence_list_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Presence list with two members, mixed online state (string tags)",
+      "size_bytes": 155,
+      "files": {
+        "descriptor": "vectors/widget_presence_list_string.json",
+        "cbor": "vectors/widget_presence_list_string.cbor"
+      }
+    },
+    {
+      "name": "widget_presence_list_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Presence list with two members, mixed online state (numeric tags)",
+      "size_bytes": 142,
+      "files": {
+        "descriptor": "vectors/widget_presence_list_numeric.json",
+        "cbor": "vectors/widget_presence_list_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_chat_with_compose_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Chat widget with two messages and an inline composer (string tags)",
+      "size_bytes": 162,
+      "files": {
+        "descriptor": "vectors/widget_chat_with_compose_string.json",
+        "cbor": "vectors/widget_chat_with_compose_string.cbor"
+      }
+    },
+    {
+      "name": "widget_chat_with_compose_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Chat widget with two messages and an inline composer (numeric tags)",
+      "size_bytes": 158,
+      "files": {
+        "descriptor": "vectors/widget_chat_with_compose_numeric.json",
+        "cbor": "vectors/widget_chat_with_compose_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_actions_topbar_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Frame with two top-bar actions (string tags)",
+      "size_bytes": 130,
+      "files": {
+        "descriptor": "vectors/widget_actions_topbar_string.json",
+        "cbor": "vectors/widget_actions_topbar_string.cbor"
+      }
+    },
+    {
+      "name": "widget_actions_topbar_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Frame with two top-bar actions (numeric tags)",
+      "size_bytes": 126,
+      "files": {
+        "descriptor": "vectors/widget_actions_topbar_numeric.json",
+        "cbor": "vectors/widget_actions_topbar_numeric.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_full_kitchen_sink_string",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "End-to-end Frame: title, multi-widget body, actions, subscribe set (string tags)",
+      "size_bytes": 275,
+      "files": {
+        "descriptor": "vectors/widget_frame_full_kitchen_sink_string.json",
+        "cbor": "vectors/widget_frame_full_kitchen_sink_string.cbor"
+      }
+    },
+    {
+      "name": "widget_frame_full_kitchen_sink_numeric",
+      "category": "widget",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "End-to-end Frame: title, multi-widget body, actions, subscribe set (numeric tags)",
+      "size_bytes": 261,
+      "files": {
+        "descriptor": "vectors/widget_frame_full_kitchen_sink_numeric.json",
+        "cbor": "vectors/widget_frame_full_kitchen_sink_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_nfc_scan_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "NFC scan event (string type)",
+      "size_bytes": 77,
+      "files": {
+        "descriptor": "vectors/event_nfc_scan_string.json",
+        "cbor": "vectors/event_nfc_scan_string.cbor"
+      }
+    },
+    {
+      "name": "event_nfc_scan_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "NFC scan event (numeric type)",
+      "size_bytes": 69,
+      "files": {
+        "descriptor": "vectors/event_nfc_scan_numeric.json",
+        "cbor": "vectors/event_nfc_scan_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_location_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "GPS fix update event (string type)",
+      "size_bytes": 60,
+      "files": {
+        "descriptor": "vectors/event_location_string.json",
+        "cbor": "vectors/event_location_string.cbor"
+      }
+    },
+    {
+      "name": "event_location_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "GPS fix update event (numeric type)",
+      "size_bytes": 52,
+      "files": {
+        "descriptor": "vectors/event_location_numeric.json",
+        "cbor": "vectors/event_location_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_back_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "BACK key event (empty payload) (string type)",
+      "size_bytes": 20,
+      "files": {
+        "descriptor": "vectors/event_back_string.json",
+        "cbor": "vectors/event_back_string.cbor"
+      }
+    },
+    {
+      "name": "event_back_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "BACK key event (empty payload) (numeric type)",
+      "size_bytes": 16,
+      "files": {
+        "descriptor": "vectors/event_back_numeric.json",
+        "cbor": "vectors/event_back_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_tick_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Periodic tick event (empty payload) (string type)",
+      "size_bytes": 20,
+      "files": {
+        "descriptor": "vectors/event_tick_string.json",
+        "cbor": "vectors/event_tick_string.cbor"
+      }
+    },
+    {
+      "name": "event_tick_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Periodic tick event (empty payload) (numeric type)",
+      "size_bytes": 16,
+      "files": {
+        "descriptor": "vectors/event_tick_numeric.json",
+        "cbor": "vectors/event_tick_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_notification_action_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "User taps a notification (string type)",
+      "size_bytes": 47,
+      "files": {
+        "descriptor": "vectors/event_notification_action_string.json",
+        "cbor": "vectors/event_notification_action_string.cbor"
+      }
+    },
+    {
+      "name": "event_notification_action_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "User taps a notification (numeric type)",
+      "size_bytes": 28,
+      "files": {
+        "descriptor": "vectors/event_notification_action_numeric.json",
+        "cbor": "vectors/event_notification_action_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_member_joined_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Group member joined event (string type)",
+      "size_bytes": 77,
+      "files": {
+        "descriptor": "vectors/event_member_joined_string.json",
+        "cbor": "vectors/event_member_joined_string.cbor"
+      }
+    },
+    {
+      "name": "event_member_joined_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Group member joined event (numeric type)",
+      "size_bytes": 64,
+      "files": {
+        "descriptor": "vectors/event_member_joined_numeric.json",
+        "cbor": "vectors/event_member_joined_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_member_left_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Group member left event (string type)",
+      "size_bytes": 61,
+      "files": {
+        "descriptor": "vectors/event_member_left_string.json",
+        "cbor": "vectors/event_member_left_string.cbor"
+      }
+    },
+    {
+      "name": "event_member_left_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Group member left event (numeric type)",
+      "size_bytes": 50,
+      "files": {
+        "descriptor": "vectors/event_member_left_numeric.json",
+        "cbor": "vectors/event_member_left_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_presence_update_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Bulk presence update event (string type)",
+      "size_bytes": 97,
+      "files": {
+        "descriptor": "vectors/event_presence_update_string.json",
+        "cbor": "vectors/event_presence_update_string.cbor"
+      }
+    },
+    {
+      "name": "event_presence_update_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "Bulk presence update event (numeric type)",
+      "size_bytes": 82,
+      "files": {
+        "descriptor": "vectors/event_presence_update_numeric.json",
+        "cbor": "vectors/event_presence_update_numeric.cbor"
+      }
+    },
+    {
+      "name": "event_group_message_string",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "New chat message event (string type)",
+      "size_bytes": 77,
+      "files": {
+        "descriptor": "vectors/event_group_message_string.json",
+        "cbor": "vectors/event_group_message_string.cbor"
+      }
+    },
+    {
+      "name": "event_group_message_numeric",
+      "category": "event",
+      "kind": "encode",
+      "tag_form": "numeric",
+      "description": "New chat message event (numeric type)",
+      "size_bytes": 64,
+      "files": {
+        "descriptor": "vectors/event_group_message_numeric.json",
+        "cbor": "vectors/event_group_message_numeric.cbor"
+      }
+    },
+    {
+      "name": "error_bad_request_400",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Server-provided body for HTTP 400 (Bad request)",
+      "size_bytes": 43,
+      "files": {
+        "descriptor": "vectors/error_bad_request_400.json",
+        "cbor": "vectors/error_bad_request_400.cbor"
+      }
+    },
+    {
+      "name": "error_unauthorized_401",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Sign-in required frame after second 401",
+      "size_bytes": 62,
+      "files": {
+        "descriptor": "vectors/error_unauthorized_401.json",
+        "cbor": "vectors/error_unauthorized_401.cbor"
+      }
+    },
+    {
+      "name": "error_forbidden_403",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Forbidden frame with descriptive text",
+      "size_bytes": 60,
+      "files": {
+        "descriptor": "vectors/error_forbidden_403.json",
+        "cbor": "vectors/error_forbidden_403.cbor"
+      }
+    },
+    {
+      "name": "error_not_found_404",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Plain 404 response frame",
+      "size_bytes": 41,
+      "files": {
+        "descriptor": "vectors/error_not_found_404.json",
+        "cbor": "vectors/error_not_found_404.cbor"
+      }
+    },
+    {
+      "name": "error_gone_410",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Gone response \u2014 evicts cache for this screen id",
+      "size_bytes": 39,
+      "files": {
+        "descriptor": "vectors/error_gone_410.json",
+        "cbor": "vectors/error_gone_410.cbor"
+      }
+    },
+    {
+      "name": "error_rate_limited_429",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Rate-limited response with transient notification",
+      "size_bytes": 84,
+      "files": {
+        "descriptor": "vectors/error_rate_limited_429.json",
+        "cbor": "vectors/error_rate_limited_429.cbor"
+      }
+    },
+    {
+      "name": "error_server_error_5xx",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Generic 5xx response body",
+      "size_bytes": 44,
+      "files": {
+        "descriptor": "vectors/error_server_error_5xx.json",
+        "cbor": "vectors/error_server_error_5xx.cbor"
+      }
+    },
+    {
+      "name": "error_local_error_frame",
+      "category": "error",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Locally-generated error frame (no usable server response), per \u00a77.4.1",
+      "size_bytes": 82,
+      "files": {
+        "descriptor": "vectors/error_local_error_frame.json",
+        "cbor": "vectors/error_local_error_frame.cbor"
+      }
+    },
+    {
+      "name": "oversized_chat",
+      "category": "oversized",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Chat frame with 8 ~50-byte messages \u2014 far over the 200B LoRa budget",
+      "size_bytes": 688,
+      "files": {
+        "descriptor": "vectors/oversized_chat.json",
+        "cbor": "vectors/oversized_chat.cbor"
+      }
+    },
+    {
+      "name": "oversized_list",
+      "category": "oversized",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "List frame with 24 items \u2014 exceeds the 200B LoRa budget",
+      "size_bytes": 1305,
+      "files": {
+        "descriptor": "vectors/oversized_list.json",
+        "cbor": "vectors/oversized_list.cbor"
+      }
+    },
+    {
+      "name": "oversized_form",
+      "category": "oversized",
+      "kind": "encode",
+      "tag_form": "string",
+      "description": "Form with 12 fields plus inline heading text",
+      "size_bytes": 654,
+      "files": {
+        "descriptor": "vectors/oversized_form.json",
+        "cbor": "vectors/oversized_form.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_widget_v1x_numeric",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "mixed",
+      "description": "Body contains an unknown numeric widget tag in the v1.x reserved range (11)",
+      "size_bytes": 59,
+      "files": {
+        "descriptor": "vectors/forward_unknown_widget_v1x_numeric.json",
+        "cbor": "vectors/forward_unknown_widget_v1x_numeric.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_widget_v2_numeric",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "numeric",
+      "description": "Body contains a pre-allocated v2 widget (tag 24, 'chart') \u2014 v1 MUST render as unsupported",
+      "size_bytes": 42,
+      "files": {
+        "descriptor": "vectors/forward_unknown_widget_v2_numeric.json",
+        "cbor": "vectors/forward_unknown_widget_v2_numeric.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_widget_runtime_numeric",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "numeric",
+      "description": "Widget tag 64 \u2014 reserved for on-device runtime (registry \u00a75.1)",
+      "size_bytes": 45,
+      "files": {
+        "descriptor": "vectors/forward_unknown_widget_runtime_numeric.json",
+        "cbor": "vectors/forward_unknown_widget_runtime_numeric.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_widget_vendor_numeric",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "numeric",
+      "description": "Widget tag 200 \u2014 vendor/experimental range",
+      "size_bytes": 41,
+      "files": {
+        "descriptor": "vectors/forward_unknown_widget_vendor_numeric.json",
+        "cbor": "vectors/forward_unknown_widget_vendor_numeric.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_widget_string",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "string",
+      "description": "Body contains an unknown string-form widget tag between two known widgets",
+      "size_bytes": 88,
+      "files": {
+        "descriptor": "vectors/forward_unknown_widget_string.json",
+        "cbor": "vectors/forward_unknown_widget_string.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_top_level_field",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "string",
+      "description": "Frame contains an unknown top-level field \u2014 MUST be silently ignored",
+      "size_bytes": 91,
+      "files": {
+        "descriptor": "vectors/forward_unknown_top_level_field.json",
+        "cbor": "vectors/forward_unknown_top_level_field.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_widget_field",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "string",
+      "description": "A known widget carries an unknown field \u2014 MUST be silently ignored",
+      "size_bytes": 80,
+      "files": {
+        "descriptor": "vectors/forward_unknown_widget_field.json",
+        "cbor": "vectors/forward_unknown_widget_field.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_event_in_subscribe",
+      "category": "forward_compat",
+      "kind": "decode_only",
+      "tag_form": "mixed",
+      "description": "Subscribe array mixes known and unknown event tags in both string and numeric form",
+      "size_bytes": 93,
+      "files": {
+        "descriptor": "vectors/forward_unknown_event_in_subscribe.json",
+        "cbor": "vectors/forward_unknown_event_in_subscribe.cbor"
+      }
+    },
+    {
+      "name": "forward_unknown_event_payload",
+      "category": "forward_compat",
+      "kind": "negative",
+      "tag_form": "string",
+      "description": "Inbound server\u2192device event with unknown type \u2014 device MUST drop",
+      "size_bytes": 37,
+      "files": {
+        "descriptor": "vectors/forward_unknown_event_payload.json",
+        "cbor": "vectors/forward_unknown_event_payload.cbor"
+      }
+    },
+    {
+      "name": "negative_unknown_major_version",
+      "category": "forward_compat",
+      "kind": "negative",
+      "tag_form": "string",
+      "description": "Frame declares an unknown major version \u2014 device MUST reject",
+      "size_bytes": 44,
+      "files": {
+        "descriptor": "vectors/negative_unknown_major_version.json",
+        "cbor": "vectors/negative_unknown_major_version.cbor"
+      }
+    },
+    {
+      "name": "negative_top_level_not_a_map",
+      "category": "forward_compat",
+      "kind": "negative",
+      "tag_form": "string",
+      "description": "Top-level CBOR value is an array, not a map \u2014 invalid Frame",
+      "size_bytes": 4,
+      "files": {
+        "descriptor": "vectors/negative_top_level_not_a_map.json",
+        "cbor": "vectors/negative_top_level_not_a_map.cbor"
+      }
+    }
+  ]
+}

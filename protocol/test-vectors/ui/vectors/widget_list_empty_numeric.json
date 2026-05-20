@@ -1,0 +1,20 @@
+{
+  "category": "widget",
+  "description": "Empty list widget \u2014 renders as dim 'empty' placeholder (numeric tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646e7363725f6c6973745f656d70747964626f647981a2617402656974656d7380",
+  "expected_size_bytes": 39,
+  "input": {
+    "body": [
+      {
+        "items": [],
+        "t": 2
+      }
+    ],
+    "id": "scr_list_empty",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_list_empty_numeric",
+  "tag_form": "numeric"
+}

@@ -1,0 +1,24 @@
+{
+  "category": "event",
+  "description": "NFC scan event (numeric type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a2647479706501677061796c6f6164a2637569644704a1b2c3d4e5f6677265636f72647381a2637572697368747470733a2f2f6578616d706c652e636f6d64747970656155",
+  "expected_size_bytes": 69,
+  "input": {
+    "payload": {
+      "records": [
+        {
+          "type": "U",
+          "uri": "https://example.com"
+        }
+      ],
+      "uid": {
+        "$bytes": "04a1b2c3d4e5f6"
+      }
+    },
+    "type": 1
+  },
+  "kind": "encode",
+  "name": "event_nfc_scan_numeric",
+  "tag_form": "numeric"
+}

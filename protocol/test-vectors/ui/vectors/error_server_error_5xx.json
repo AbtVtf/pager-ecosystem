@@ -1,0 +1,20 @@
+{
+  "category": "error",
+  "description": "Generic 5xx response body",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964676572725f35303064626f647981a261736c536572766572206572726f7261746474657874",
+  "expected_size_bytes": 44,
+  "input": {
+    "body": [
+      {
+        "s": "Server error",
+        "t": "text"
+      }
+    ],
+    "id": "err_500",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_server_error_5xx",
+  "tag_form": "string"
+}

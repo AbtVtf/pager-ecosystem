@@ -1,0 +1,30 @@
+{
+  "category": "forward_compat",
+  "description": "Subscribe array mixes known and unknown event tags in both string and numeric form",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a4617601626964781e6677645f756e6b6e6f776e5f6576656e745f696e5f73756273637269626564626f647981a26173626f6b617464746578746973756273637269626584686e66635f7363616e6c6675747572655f6576656e740702",
+  "expected_decoded": {
+    "body": [
+      {
+        "s": "ok",
+        "t": "text"
+      }
+    ],
+    "id": "fwd_unknown_event_in_subscribe",
+    "subscribe_dropped": [
+      "future_event",
+      7
+    ],
+    "subscribe_effective": [
+      "nfc_scan",
+      2
+    ],
+    "v": 1
+  },
+  "expected_size_bytes": 93,
+  "input_cbor_hex": "a4617601626964781e6677645f756e6b6e6f776e5f6576656e745f696e5f73756273637269626564626f647981a26173626f6b617464746578746973756273637269626584686e66635f7363616e6c6675747572655f6576656e740702",
+  "kind": "decode_only",
+  "name": "forward_unknown_event_in_subscribe",
+  "notes": "Spec \u00a76.3: unknown event tags in subscribe MUST be silently ignored. Tag 7 is in the reserved 6-15 device-event range. After filtering, the device subscribes to nfc_scan + location (2).",
+  "tag_form": "mixed"
+}

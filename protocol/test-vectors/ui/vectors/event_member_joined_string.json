@@ -1,0 +1,20 @@
+{
+  "category": "event",
+  "description": "Group member joined event (string type)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a264747970656d6d656d6265725f6a6f696e6564677061796c6f6164a2666d656d626572a262696468706b5f6361726f6c646e616d65656361726f6c6867726f75705f6964676772705f616263",
+  "expected_size_bytes": 77,
+  "input": {
+    "payload": {
+      "group_id": "grp_abc",
+      "member": {
+        "id": "pk_carol",
+        "name": "carol"
+      }
+    },
+    "type": "member_joined"
+  },
+  "kind": "encode",
+  "name": "event_member_joined_string",
+  "tag_form": "string"
+}

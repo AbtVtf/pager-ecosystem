@@ -1,0 +1,42 @@
+{
+  "category": "widget",
+  "description": "Form with heading text between fields, explicit method and submit (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a46176016269646d7363725f666f726d5f66756c6c64626f647981a5617464666f726d66616374696f6e652f73617665666669656c647383a361736c4e6f74652064657461696c7361746474657874657374796c656768656164696e67a4617465696e707574636d61781850646e616d65657469746c65656c6162656c655469746c65a4617465696e707574646e616d6564626f647964747970656474657874656c6162656c64426f6479666d6574686f6464504f5354667375626d69746453617665657469746c656945646974206e6f7465",
+  "expected_size_bytes": 211,
+  "input": {
+    "body": [
+      {
+        "action": "/save",
+        "fields": [
+          {
+            "s": "Note details",
+            "style": "heading",
+            "t": "text"
+          },
+          {
+            "label": "Title",
+            "max": 80,
+            "name": "title",
+            "t": "input"
+          },
+          {
+            "label": "Body",
+            "name": "body",
+            "t": "input",
+            "type": "text"
+          }
+        ],
+        "method": "POST",
+        "submit": "Save",
+        "t": "form"
+      }
+    ],
+    "id": "scr_form_full",
+    "title": "Edit note",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_form_full_string",
+  "tag_form": "string"
+}

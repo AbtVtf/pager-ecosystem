@@ -1,0 +1,21 @@
+{
+  "category": "error",
+  "description": "Server-provided body for HTTP 400 (Bad request)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a3617601626964676572725f34303064626f647981a261736b426164207265717565737461746474657874",
+  "expected_size_bytes": 43,
+  "input": {
+    "body": [
+      {
+        "s": "Bad request",
+        "t": "text"
+      }
+    ],
+    "id": "err_400",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "error_bad_request_400",
+  "notes": "Server MAY return a single-widget Frame body on 4xx/5xx.",
+  "tag_form": "string"
+}

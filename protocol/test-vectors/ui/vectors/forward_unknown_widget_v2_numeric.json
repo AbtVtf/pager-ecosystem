@@ -1,0 +1,31 @@
+{
+  "category": "forward_compat",
+  "description": "Body contains a pre-allocated v2 widget (tag 24, 'chart') \u2014 v1 MUST render as unsupported",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646c6677645f76325f636861727464626f647981a2617418186464617461850102030405",
+  "expected_decoded": {
+    "body": [
+      {
+        "$render_placeholder": "[unsupported: 24]",
+        "raw_widget": {
+          "data": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "t": 24
+        }
+      }
+    ],
+    "id": "fwd_v2_chart",
+    "v": 1
+  },
+  "expected_size_bytes": 42,
+  "input_cbor_hex": "a36176016269646c6677645f76325f636861727464626f647981a2617418186464617461850102030405",
+  "kind": "decode_only",
+  "name": "forward_unknown_widget_v2_numeric",
+  "notes": "v1 servers MUST NOT emit tags 24-29 (spec \u00a75.11); v1 renderers MUST treat them as unknown.",
+  "tag_form": "numeric"
+}

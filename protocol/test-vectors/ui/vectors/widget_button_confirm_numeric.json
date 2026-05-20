@@ -1,0 +1,23 @@
+{
+  "category": "widget",
+  "description": "Destructive POST button with confirmation prompt (numeric tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a36176016269646f7363725f62746e5f636f6e6669726d64626f647981a561740564687265666a2f64656c6574652f3432656c6162656c6644656c657465666d6574686f6464504f535467636f6e6669726d6d41726520796f7520737572653f",
+  "expected_size_bytes": 96,
+  "input": {
+    "body": [
+      {
+        "confirm": "Are you sure?",
+        "href": "/delete/42",
+        "label": "Delete",
+        "method": "POST",
+        "t": 5
+      }
+    ],
+    "id": "scr_btn_confirm",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_button_confirm_numeric",
+  "tag_form": "numeric"
+}

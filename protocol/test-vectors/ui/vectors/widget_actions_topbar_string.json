@@ -1,0 +1,34 @@
+{
+  "category": "widget",
+  "description": "Frame with two top-bar actions (string tags)",
+  "encoding": "canonical_rfc8949",
+  "expected_cbor_hex": "a56176016269646b7363725f616374696f6e7364626f647981a261736757656c636f6d6561746474657874657469746c65654e6f74657367616374696f6e7382a3636b6579616e6468726566642f6e6577656c6162656c634e6577a4636b657961726468726566612f656c6162656c6752656672657368666d6574686f6463474554",
+  "expected_size_bytes": 130,
+  "input": {
+    "actions": [
+      {
+        "href": "/new",
+        "key": "n",
+        "label": "New"
+      },
+      {
+        "href": "/",
+        "key": "r",
+        "label": "Refresh",
+        "method": "GET"
+      }
+    ],
+    "body": [
+      {
+        "s": "Welcome",
+        "t": "text"
+      }
+    ],
+    "id": "scr_actions",
+    "title": "Notes",
+    "v": 1
+  },
+  "kind": "encode",
+  "name": "widget_actions_topbar_string",
+  "tag_form": "string"
+}
