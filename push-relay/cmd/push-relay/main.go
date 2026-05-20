@@ -50,14 +50,19 @@ func main() {
 		logger.Warn("PUSH_RELAY_MARKETPLACE_URL unset — /push will return 503 for all requests until configured")
 	}
 
+	if cfg.AdminToken == "" {
+		logger.Warn("PUSH_RELAY_ADMIN_TOKEN unset — admin dashboard disabled")
+	}
+
 	srv := server.New(server.Options{
-		Addr:     cfg.Addr,
-		TLSCert:  cfg.TLSCertFile,
-		TLSKey:   cfg.TLSKeyFile,
-		Storage:  store,
-		Manifest: mlookup,
-		Logger:   logger,
-		BuildTag: cfg.BuildTag,
+		Addr:       cfg.Addr,
+		TLSCert:    cfg.TLSCertFile,
+		TLSKey:     cfg.TLSKeyFile,
+		Storage:    store,
+		Manifest:   mlookup,
+		Logger:     logger,
+		BuildTag:   cfg.BuildTag,
+		AdminToken: cfg.AdminToken,
 	})
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

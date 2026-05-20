@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
 	"github.com/pageros/pageros/push-relay/internal/storage"
 )
@@ -22,6 +23,11 @@ type Options struct {
 	BuildTag string
 	// MaxPushBytes optionally overrides DefaultMaxPushBytes for POST /push.
 	MaxPushBytes int64
+	// Admin owns send-volume metrics and the ban list (PUSH-008). When nil,
+	// the server constructs a fresh in-memory store so the push handler can
+	// still record volumes; admin routes only mount if AdminToken is set.
+	Admin      *admin.Store
+	AdminToken string
 }
 
 type Server struct {
@@ -35,11 +41,16 @@ func New(opts Options) *Server {
 		opts.Logger = slog.Default()
 	}
 
+	if opts.Admin == nil {
+		opts.Admin = admin.New()
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", newHealthzHandler(opts.Storage, opts.BuildTag))
 	mux.Handle("GET /pull/{device_pubkey}", newPullHandler(opts.Storage, opts.Logger, 0))
-	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Logger, 0, opts.MaxPushBytes))
+	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.Logger, 0, opts.MaxPushBytes))
 	mux.Handle("DELETE /pull/{device_pubkey}/{notification_id}", newAckHandler(opts.Storage, opts.Logger, 0))
+	admin.Mount(mux, admin.MountConfig{Store: opts.Admin, Token: opts.AdminToken, Logger: opts.Logger})
 
 	s := &Server{
 		opts:   opts,

@@ -56,6 +56,7 @@ service logs a warning — production deployments must set them).
 | `PUSH_RELAY_REDIS_URL` | `redis://localhost:6379/0`    | `redis://` or `rediss://`              |
 | `PUSH_RELAY_BUILD_TAG` | `dev`                         | Surfaced in `/healthz` for ops sanity  |
 | `PUSH_RELAY_MARKETPLACE_URL` | _(unset)_               | Registry root (e.g. `https://market.pageros.org`). When unset, `POST /push` returns 503 — the relay has no way to verify app signatures without it. |
+| `PUSH_RELAY_ADMIN_TOKEN` | _(unset)_                   | Bearer token for `/admin/*` (PUSH-008). Must be ≥16 chars. When unset, all admin routes return `503 Service Unavailable`. |
 
 ## Test
 
@@ -172,3 +173,33 @@ separately.
   improving correctness.
 - Delegates to `storage.Store.Delete` (already in place from PUSH-005);
   no new storage surface added.
+
+## What this task delivers (PUSH-008)
+
+Admin / abuse dashboard surface in `internal/admin`:
+
+- `admin.Store` tracks per-app and per-device send volumes for every
+  successful `POST /push` (recorded after enqueue, so failed requests
+  never inflate counters). It also owns a bear-bones ban list of app
+  ids.
+- The push handler consults `admin.Store.IsBanned(appID)` before the
+  marketplace lookup and short-circuits banned apps with **403
+  Forbidden**, matching the format SPEC §6.6.2 already uses for
+  unknown apps. This stops a banned sender from generating extra
+  registry traffic.
+- HTTP surface mounted at `/admin/*`, all guarded by an
+  `Authorization: Bearer ${PUSH_RELAY_ADMIN_TOKEN}` header
+  (constant-time compare). When the env var is unset the routes
+  return **503 Service Unavailable** — opt-in by design.
+
+| Method | Path                          | Body / response                                      |
+| ------ | ----------------------------- | ---------------------------------------------------- |
+| GET    | `/admin/metrics`              | `{apps:[...], devices:[...]}` sorted by volume desc  |
+| GET    | `/admin/bans`                 | `{bans:[{app_id, reason, banned_at}, ...]}`          |
+| POST   | `/admin/bans`                 | `{"app_id":"x.y","reason":"..."}` → `201` with `Ban` |
+| DELETE | `/admin/bans/{app_id}`        | `204`, or `404` if not currently banned              |
+
+Storage is in-memory; counters reset on restart. Cross-restart
+persistence and metrics export live with PUSH-009 alongside the
+deployment + monitoring story — the M3 acceptance only requires an
+authenticated *view* of volumes and a ban knob, which this delivers.

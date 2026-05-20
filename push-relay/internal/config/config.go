@@ -14,6 +14,9 @@ type Config struct {
 	RedisURL       string
 	BuildTag       string
 	MarketplaceURL string
+	// AdminToken is the shared bearer credential for /admin/* (PUSH-008).
+	// Empty disables the admin surface.
+	AdminToken string
 }
 
 func FromEnv() (Config, error) {
@@ -24,6 +27,7 @@ func FromEnv() (Config, error) {
 		RedisURL:       envOr("PUSH_RELAY_REDIS_URL", "redis://localhost:6379/0"),
 		BuildTag:       envOr("PUSH_RELAY_BUILD_TAG", "dev"),
 		MarketplaceURL: os.Getenv("PUSH_RELAY_MARKETPLACE_URL"),
+		AdminToken:     os.Getenv("PUSH_RELAY_ADMIN_TOKEN"),
 	}
 
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
@@ -36,6 +40,9 @@ func FromEnv() (Config, error) {
 		!strings.HasPrefix(cfg.MarketplaceURL, "http://") &&
 		!strings.HasPrefix(cfg.MarketplaceURL, "https://") {
 		return Config{}, fmt.Errorf("PUSH_RELAY_MARKETPLACE_URL must start with http:// or https://")
+	}
+	if cfg.AdminToken != "" && len(cfg.AdminToken) < 16 {
+		return Config{}, fmt.Errorf("PUSH_RELAY_ADMIN_TOKEN must be at least 16 chars")
 	}
 	return cfg, nil
 }

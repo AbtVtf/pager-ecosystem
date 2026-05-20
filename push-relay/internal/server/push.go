@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
 	"github.com/pageros/pageros/push-relay/internal/pageossig"
 	"github.com/pageros/pageros/push-relay/internal/storage"
@@ -58,7 +59,7 @@ type pushResponse struct {
 //
 // The relay never decrypts the payload — body bytes are stored verbatim
 // (SPEC §6.6.3).
-func newPushHandler(store storage.Store, lookup manifest.Lookup, logger *slog.Logger, maxSkew time.Duration, maxBodyBytes int64) http.Handler {
+func newPushHandler(store storage.Store, lookup manifest.Lookup, recorder admin.Recorder, logger *slog.Logger, maxSkew time.Duration, maxBodyBytes int64) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -127,6 +128,12 @@ func newPushHandler(store storage.Store, lookup manifest.Lookup, logger *slog.Lo
 			writePushError(w, logger, http.StatusForbidden, "invalid app id format", nil)
 			return
 		}
+		// Ban check fires before the marketplace lookup so a banned app
+		// cannot keep generating registry traffic. PUSH-008.
+		if recorder != nil && recorder.IsBanned(appID) {
+			writePushError(w, logger, http.StatusForbidden, "app is banned", nil)
+			return
+		}
 		if sigHdr == "" {
 			writePushError(w, logger, http.StatusUnauthorized, "missing signature header", nil)
 			return
@@ -182,6 +189,10 @@ func newPushHandler(store storage.Store, lookup manifest.Lookup, logger *slog.Lo
 				http.Error(w, "internal error", http.StatusInternalServerError)
 			}
 			return
+		}
+
+		if recorder != nil {
+			recorder.RecordSend(appID, devicePubkeyStr)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

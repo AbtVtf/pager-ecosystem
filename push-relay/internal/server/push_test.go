@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
 	"github.com/pageros/pageros/push-relay/internal/pageossig"
 	"github.com/pageros/pageros/push-relay/internal/storage"
@@ -45,14 +46,16 @@ type pushTestRig struct {
 	srv    *Server
 	store  storage.Store
 	lookup *fakeLookup
+	admin  *admin.Store
 }
 
 func newPushRig(t *testing.T) *pushTestRig {
 	t.Helper()
 	store := storage.NewMemory()
 	lookup := &fakeLookup{keys: map[string]ed25519.PublicKey{}}
-	srv := New(Options{Storage: store, Manifest: lookup, BuildTag: "test"})
-	return &pushTestRig{srv: srv, store: store, lookup: lookup}
+	adm := admin.New()
+	srv := New(Options{Storage: store, Manifest: lookup, Admin: adm, BuildTag: "test"})
+	return &pushTestRig{srv: srv, store: store, lookup: lookup, admin: adm}
 }
 
 func (r *pushTestRig) registerApp(t *testing.T, appID string, priv ed25519.PrivateKey) {
@@ -395,6 +398,66 @@ func TestPushErrorBodiesAreGeneric(t *testing.T) {
 	body := strings.TrimSpace(rec.Body.String())
 	if body != "Unauthorized" {
 		t.Fatalf("expected generic body %q, got %q", "Unauthorized", body)
+	}
+}
+
+// --- PUSH-008: ban check + volume recording ----------------------------- //
+
+func TestPushBannedAppReturns403(t *testing.T) {
+	rig := newPushRig(t)
+	deviceKey := devicePubkeyForTest(t)
+	_, appPriv := newAppKey(t, sigVectorSeedHex)
+	rig.registerApp(t, "notes.mafu.dev", appPriv)
+	rig.admin.Ban("notes.mafu.dev", "spam")
+
+	req := signedPush(t, appPriv, "notes.mafu.dev", deviceKey, []byte("x"), time.Now())
+	rec := httptest.NewRecorder()
+	rig.srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	// Nothing should be enqueued.
+	stored, _ := rig.store.List(context.Background(), deviceKey)
+	if len(stored) != 0 {
+		t.Fatalf("banned app should not enqueue; got %d", len(stored))
+	}
+}
+
+func TestPushRecordsSendOnSuccess(t *testing.T) {
+	rig := newPushRig(t)
+	deviceKey := devicePubkeyForTest(t)
+	_, appPriv := newAppKey(t, sigVectorSeedHex)
+	rig.registerApp(t, "notes.mafu.dev", appPriv)
+
+	req := signedPush(t, appPriv, "notes.mafu.dev", deviceKey, []byte("hello"), time.Now())
+	rec := httptest.NewRecorder()
+	rig.srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	snap := rig.admin.Snapshot()
+	if len(snap.Apps) != 1 || snap.Apps[0].Total != 1 {
+		t.Fatalf("admin store did not record send: %+v", snap)
+	}
+	if snap.Devices[0].DevicePubkey != deviceKey {
+		t.Fatalf("device pubkey mismatch in admin store: %+v", snap.Devices)
+	}
+}
+
+func TestPushDoesNotRecordOnFailure(t *testing.T) {
+	rig := newPushRig(t)
+	deviceKey := devicePubkeyForTest(t)
+	_, appPriv := newAppKey(t, sigVectorSeedHex)
+	// No app registered → 403, must not record.
+
+	req := signedPush(t, appPriv, "notes.mafu.dev", deviceKey, []byte("x"), time.Now())
+	rec := httptest.NewRecorder()
+	rig.srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if snap := rig.admin.Snapshot(); len(snap.Apps) != 0 {
+		t.Fatalf("admin store should not record failed sends: %+v", snap)
 	}
 }
 
