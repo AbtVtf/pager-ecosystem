@@ -43,7 +43,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "pagerctl flash: %v\n", err)
 			os.Exit(1)
 		}
-	case "init", "dev", "simulate", "publish", "link":
+	case "publish":
+		if err := runPublish(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "pagerctl publish: %v\n", err)
+			os.Exit(1)
+		}
+	case "init", "dev", "simulate", "link":
 		fmt.Fprintf(os.Stderr, "pagerctl: %q is not implemented yet\n", os.Args[1])
 		os.Exit(1)
 	default:
