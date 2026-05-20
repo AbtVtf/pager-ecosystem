@@ -33,13 +33,24 @@ import argparse
 import inspect
 import logging
 import sys
+import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, urlsplit
 
+from nacl.signing import SigningKey
+
 from pageros.codec import CborDecodeError, decode_frame, encode_frame
+from pageros.encryption import AppKeypair
 from pageros.lora_budget import check_frame_size
+from pageros.push import (
+    DEFAULT_PUSH_RELAY_URL,
+    PushConfig,
+    PushError,
+    PushResult,
+    send_push,
+)
 
 __all__ = ["App", "Request", "Response"]
 
@@ -114,10 +125,30 @@ class App:
         name: str | None = None,
         *,
         lora_compatible: bool = False,
+        app_id: str | None = None,
+        signing_key: SigningKey | None = None,
+        keypair: AppKeypair | None = None,
+        push_relay_url: str = DEFAULT_PUSH_RELAY_URL,
     ) -> None:
         self.name = name or "pageros-app"
         self.lora_compatible = lora_compatible
         self._routes: dict[tuple[str, str], Handler] = {}
+
+        # Push-relay configuration (PY-006). All four fields are optional at
+        # construction time; ``push()`` raises if any required piece is
+        # missing when called. This lets apps that never call push() avoid
+        # generating keys they don't need (e.g. read-only screen apps).
+        self.app_id = app_id
+        self.signing_key = signing_key
+        self.keypair = keypair
+        self.push_relay_url = push_relay_url
+
+        # Per-(app, device) AEAD counter store for crypto-suite.md §1.2.
+        # In-process only — apps with cross-reboot durability needs should
+        # subclass and persist this map, or pass an explicit ``counter`` to
+        # :meth:`push`.
+        self._push_counters: dict[bytes, int] = {}
+        self._push_counter_lock = threading.Lock()
 
     # ----- registration -----
 
@@ -220,6 +251,82 @@ class App:
             return self._error_response(500, "Server error")
 
         return self._build_response(result, route_label=f"{method_norm} {route_path}")
+
+    # ----- push -----
+
+    def push(
+        self,
+        device_id: bytes | str,
+        payload: Any,
+        *,
+        counter: int | None = None,
+        timeout: float | None = 10.0,
+    ) -> PushResult:
+        """Send a notification to ``device_id`` via the Push Relay (PY-006).
+
+        Returns a :class:`pageros.push.PushResult` on HTTP 202. Raises
+        :class:`pageros.push.PushRejected` for 4xx (auth, unknown app,
+        rate limit, ...) and :class:`pageros.push.PushUnavailable` for
+        5xx, malformed responses, or connection failures.
+
+        ``device_id`` accepts the raw 32-byte X25519 device pubkey or its
+        base64url (padded or unpadded) string form. ``payload`` is either
+        a CBOR-encodable Python value (encoded via :func:`pageros.codec.encode_frame`)
+        or pre-encoded ``bytes``.
+
+        ``counter`` should be a monotonic per-device value (crypto-suite.md
+        §1.2 forbids random nonces; the app must persist the counter for
+        cross-reboot uniqueness). When omitted, the app's in-process
+        :attr:`_push_counters` table is used — adequate for one-shot
+        scripts but **not** safe across restarts. Long-running apps should
+        manage their own counter and pass it explicitly.
+        """
+        config = self._push_config()
+        device_key = self._device_key_from(device_id)
+        resolved_counter = (
+            counter if counter is not None else self._next_counter(device_key)
+        )
+        return send_push(
+            config,
+            device_id,
+            payload,
+            counter=resolved_counter,
+            timeout=timeout,
+        )
+
+    def _push_config(self) -> PushConfig:
+        missing = [
+            name for name, value in (
+                ("app_id", self.app_id),
+                ("signing_key", self.signing_key),
+                ("keypair", self.keypair),
+            )
+            if value is None
+        ]
+        if missing:
+            raise PushError(
+                "app.push() requires "
+                + ", ".join(missing)
+                + " on the App constructor"
+            )
+        return PushConfig(
+            app_id=self.app_id,  # type: ignore[arg-type]
+            signing_key=self.signing_key,  # type: ignore[arg-type]
+            keypair=self.keypair,  # type: ignore[arg-type]
+            relay_url=self.push_relay_url,
+        )
+
+    @staticmethod
+    def _device_key_from(device_id: bytes | str) -> bytes:
+        if isinstance(device_id, (bytes, bytearray, memoryview)):
+            return bytes(device_id)
+        return device_id.encode("ascii", errors="strict")
+
+    def _next_counter(self, device_key: bytes) -> int:
+        with self._push_counter_lock:
+            counter = self._push_counters.get(device_key, 0)
+            self._push_counters[device_key] = counter + 1
+            return counter
 
     # ----- HTTP runtime -----
 
