@@ -1,5 +1,21 @@
 """PagerOS Python SDK."""
 
+from pageros.encryption import (
+    AEAD_KEY_LEN,
+    AEAD_NONCE_LEN,
+    AEAD_TAG_LEN,
+    AppKeypair,
+    DecryptionError,
+    EncryptedRequestMiddleware,
+    EncryptionError,
+    InvalidEncryptionHeader,
+    MissingEncryptionHeader,
+    X25519_KEY_LEN,
+    build_nonce,
+    decrypt,
+    derive_session_key,
+    encrypt,
+)
 from pageros.lora_budget import LORA_FRAME_BUDGET_BYTES, check_frame_size
 from pageros.manifest import App, Maintainer
 from pageros.signing import (
@@ -23,24 +39,38 @@ from pageros.signing import (
 __version__ = "0.0.1"
 
 __all__ = [
+    "AEAD_KEY_LEN",
+    "AEAD_NONCE_LEN",
+    "AEAD_TAG_LEN",
     "App",
+    "AppKeypair",
     "BadSignature",
     "DEFAULT_MAX_SKEW_SECONDS",
+    "DecryptionError",
+    "EncryptedRequestMiddleware",
+    "EncryptionError",
     "HEADER_DEVICE",
     "HEADER_SIG",
     "HEADER_TIMESTAMP",
     "InvalidEncoding",
+    "InvalidEncryptionHeader",
     "LORA_FRAME_BUDGET_BYTES",
     "Maintainer",
+    "MissingEncryptionHeader",
     "MissingHeader",
     "SignatureError",
     "SignatureVerifierMiddleware",
     "TimestampSkew",
     "VerifiedRequest",
+    "X25519_KEY_LEN",
     "__version__",
+    "build_nonce",
     "build_signing_input",
     "check_frame_size",
     "compute_body_hash",
+    "decrypt",
+    "derive_session_key",
+    "encrypt",
     "sign_request",
     "verify_request",
 ]
