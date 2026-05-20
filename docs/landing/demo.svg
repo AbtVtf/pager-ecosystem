@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 480 222"
+     width="480" height="222"
+     role="img"
+     aria-label="Animated demo of the PagerOS Shell cycling through the home launcher, the Notes app, and a group chat.">
+  <title>PagerOS Shell demo</title>
+  <desc>
+    Cycles between three screens at native 480x222 device resolution:
+    a launcher (home), a Notes app list, and a Chat group. Each screen
+    shows for ~3 seconds. This animated SVG is a placeholder for a real
+    recorded GIF once the simulator and firmware can produce one.
+  </desc>
+
+  <defs>
+    <style>
+      .bg     { fill: #0e1116; }
+      .panel  { fill: #11151a; }
+      .tbar   { fill: #1a2028; }
+      .accent { fill: #34d399; }
+      .row    { fill: #1a2028; }
+      .row-sel { fill: #34d399; }
+      .text-fg { fill: #e6e8eb; font-family: ui-monospace, Menlo, Consolas, monospace; }
+      .text-mu { fill: #9aa3ad; font-family: ui-monospace, Menlo, Consolas, monospace; }
+      .text-dk { fill: #0b0d10; font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+      /* Each screen group is hidden by default. CSS keyframes cycle them. */
+      .screen { opacity: 0; }
+      #s-home { animation: cycle 9s infinite; animation-delay: 0s; }
+      #s-notes { animation: cycle 9s infinite; animation-delay: -6s; }
+      #s-chat { animation: cycle 9s infinite; animation-delay: -3s; }
+
+      @keyframes cycle {
+        0%   { opacity: 0; }
+        2%   { opacity: 1; }
+        33%  { opacity: 1; }
+        35%  { opacity: 0; }
+        100% { opacity: 0; }
+      }
+      /* Selected row blink on home */
+      #home-sel { animation: blink 1.2s infinite ease-in-out; }
+      @keyframes blink {
+        0%, 100% { opacity: 0.95; }
+        50% { opacity: 0.65; }
+      }
+      /* New chat message slide-in */
+      #chat-new { animation: slidein 9s infinite; animation-delay: -3s; }
+      @keyframes slidein {
+        0%, 12% { transform: translateY(8px); opacity: 0; }
+        15%     { transform: translateY(0);    opacity: 1; }
+        33%     { transform: translateY(0);    opacity: 1; }
+        35%, 100% { opacity: 0; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .screen { opacity: 1; }
+        #s-notes, #s-chat { display: none; }
+        #s-home { animation: none; opacity: 1; }
+        #home-sel, #chat-new { animation: none; }
+      }
+    </style>
+  </defs>
+
+  <!-- device background -->
+  <rect class="bg" x="0" y="0" width="480" height="222" rx="6" ry="6"/>
+
+  <!-- ============ SCREEN 1: HOME / LAUNCHER ============ -->
+  <g id="s-home" class="screen">
+    <!-- top bar -->
+    <rect class="tbar" x="0" y="0" width="480" height="22"/>
+    <text class="text-fg" x="10" y="15" font-size="12">PagerOS</text>
+    <text class="text-mu" x="380" y="15" font-size="12">Wi-Fi · 84%</text>
+
+    <!-- launcher grid: 4 cols x 2 rows of "icons" -->
+    <g transform="translate(20,40)">
+      <!-- row 1 -->
+      <g>
+        <rect id="home-sel" class="row-sel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-dk" x="50" y="40" font-size="11" text-anchor="middle">Notes</text>
+        <text class="text-dk" x="50" y="56" font-size="9" text-anchor="middle" opacity="0.8">notes.app</text>
+      </g>
+      <g transform="translate(110,0)">
+        <rect class="panel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-fg" x="50" y="40" font-size="11" text-anchor="middle">Chat</text>
+        <text class="text-mu" x="50" y="56" font-size="9" text-anchor="middle">3 unread</text>
+      </g>
+      <g transform="translate(220,0)">
+        <rect class="panel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-fg" x="50" y="40" font-size="11" text-anchor="middle">Weather</text>
+        <text class="text-mu" x="50" y="56" font-size="9" text-anchor="middle">17°C</text>
+      </g>
+      <g transform="translate(330,0)">
+        <rect class="panel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-fg" x="50" y="40" font-size="11" text-anchor="middle">Maps</text>
+        <text class="text-mu" x="50" y="56" font-size="9" text-anchor="middle">GPS lock</text>
+      </g>
+      <!-- row 2 -->
+      <g transform="translate(0,80)">
+        <rect class="panel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-fg" x="50" y="40" font-size="11" text-anchor="middle">Market</text>
+        <text class="text-mu" x="50" y="56" font-size="9" text-anchor="middle">browse</text>
+      </g>
+      <g transform="translate(110,80)">
+        <rect class="panel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-fg" x="50" y="40" font-size="11" text-anchor="middle">NFC</text>
+        <text class="text-mu" x="50" y="56" font-size="9" text-anchor="middle">scan</text>
+      </g>
+      <g transform="translate(220,80)">
+        <rect class="panel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-fg" x="50" y="40" font-size="11" text-anchor="middle">Reminders</text>
+      </g>
+      <g transform="translate(330,80)">
+        <rect class="panel" x="0" y="0" width="100" height="70" rx="6"/>
+        <text class="text-fg" x="50" y="40" font-size="11" text-anchor="middle">Settings</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ============ SCREEN 2: NOTES LIST ============ -->
+  <g id="s-notes" class="screen">
+    <rect class="tbar" x="0" y="0" width="480" height="22"/>
+    <text class="text-fg" x="10" y="15" font-size="12">Notes</text>
+    <text class="text-mu" x="380" y="15" font-size="12">[N]ew  [Q]uit</text>
+
+    <g transform="translate(16,34)">
+      <rect class="row-sel" x="0" y="0" width="448" height="32" rx="4"/>
+      <text class="text-dk" x="10" y="14" font-size="12" font-weight="bold">Groceries</text>
+      <text class="text-dk" x="10" y="28" font-size="10" opacity="0.8">milk, eggs, bread</text>
+
+      <rect class="row" x="0" y="40" width="448" height="32" rx="4"/>
+      <text class="text-fg" x="10" y="54" font-size="12">Pager pinout sketch</text>
+      <text class="text-mu" x="10" y="68" font-size="10">2 days ago</text>
+
+      <rect class="row" x="0" y="80" width="448" height="32" rx="4"/>
+      <text class="text-fg" x="10" y="94" font-size="12">Coffee shop wifi notes</text>
+      <text class="text-mu" x="10" y="108" font-size="10">last week</text>
+
+      <rect class="row" x="0" y="120" width="448" height="32" rx="4"/>
+      <text class="text-fg" x="10" y="134" font-size="12">Trip checklist</text>
+      <text class="text-mu" x="10" y="148" font-size="10">last week</text>
+    </g>
+  </g>
+
+  <!-- ============ SCREEN 3: CHAT (multi-device) ============ -->
+  <g id="s-chat" class="screen">
+    <rect class="tbar" x="0" y="0" width="480" height="22"/>
+    <text class="text-fg" x="10" y="15" font-size="12">Chat · #lora-test</text>
+    <circle class="accent" cx="350" cy="11" r="4"/>
+    <text class="text-mu" x="360" y="15" font-size="12">3 online</text>
+
+    <g transform="translate(16,32)">
+      <!-- message 1 -->
+      <rect class="row" x="0" y="0" width="320" height="32" rx="4"/>
+      <text class="text-mu" x="10" y="13" font-size="10">alice</text>
+      <text class="text-fg" x="10" y="27" font-size="12">anyone testing the new firmware?</text>
+
+      <!-- message 2 (right-aligned, our msg) -->
+      <rect class="row-sel" x="138" y="40" width="310" height="32" rx="4"/>
+      <text class="text-dk" x="148" y="53" font-size="10" opacity="0.8">you</text>
+      <text class="text-dk" x="148" y="67" font-size="12">just flashed it, looks good</text>
+
+      <!-- message 3 -->
+      <rect class="row" x="0" y="80" width="280" height="32" rx="4"/>
+      <text class="text-mu" x="10" y="93" font-size="10">bob</text>
+      <text class="text-fg" x="10" y="107" font-size="12">range test at 1km worked</text>
+
+      <!-- incoming new message (slides in) -->
+      <g id="chat-new">
+        <rect class="row" x="0" y="120" width="340" height="32" rx="4"/>
+        <text class="text-mu" x="10" y="133" font-size="10">alice</text>
+        <text class="text-fg" x="10" y="147" font-size="12">trying 3-hop now via @exit-mtl</text>
+      </g>
+    </g>
+
+    <!-- composer -->
+    <rect class="panel" x="16" y="186" width="448" height="22" rx="4"/>
+    <text class="text-mu" x="24" y="201" font-size="11">type a message…</text>
+  </g>
+</svg>

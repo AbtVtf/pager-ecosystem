@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PagerOS — Apps for your pocket. Wi-Fi or LoRa.</title>
+  <meta name="description" content="An OS and app ecosystem for the LILYGO T-LoRa Pager. Apps live on the internet. Your pager reaches them over Wi-Fi or LoRa mesh." />
+  <meta property="og:title" content="PagerOS" />
+  <meta property="og:description" content="Apps for your pocket. Over Wi-Fi or LoRa mesh." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://pageros.org/" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="/" aria-label="PagerOS home">
+      <span class="logo-mark" aria-hidden="true">▢</span>
+      <span class="logo-text">PagerOS</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="https://docs.pageros.org/">Docs</a>
+      <a href="https://docs.pageros.org/spec/">Spec</a>
+      <a href="https://github.com/paperclipai/pager-ecosystem">Source</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <h1>Apps for your pocket.<br />Wi-Fi or LoRa.</h1>
+        <p class="tagline">
+          A pocket-sized device that gives anyone, anywhere, access to a
+          universe of small, useful apps — over the internet when available,
+          over LoRa mesh when not.
+        </p>
+        <div class="cta-row">
+          <a class="cta cta-primary" href="#get-a-device">
+            Get a device <span aria-hidden="true">→</span>
+          </a>
+          <a class="cta cta-secondary" href="#build-an-app">
+            Build an app <span aria-hidden="true">→</span>
+          </a>
+        </div>
+        <p class="status">
+          Status: pre-alpha. Open-source. Apache 2.0 (TBD).
+        </p>
+      </div>
+      <figure class="hero-demo" aria-labelledby="demo-caption">
+        <!--
+          TODO: replace with a recorded GIF/MP4 once the simulator (SIM-*) and
+          firmware shell (FW-*) can produce a real frame stream. The animated
+          SVG below mimics the device UI at native 480x222 resolution so the
+          landing page still demonstrates the form factor.
+        -->
+        <img
+          src="demo.svg"
+          width="480"
+          height="222"
+          alt="Animated demo of the PagerOS Shell cycling through the home launcher, a notes app, and a chat app."
+        />
+        <figcaption id="demo-caption">PagerOS Shell — 480 × 222 native</figcaption>
+      </figure>
+    </section>
+
+    <section class="pillars">
+      <div class="pillar">
+        <h2>Reach</h2>
+        <p>
+          Wi-Fi where it's available. Multi-hop LoRa mesh where it isn't.
+          One identity, same apps, both transports.
+        </p>
+      </div>
+      <div class="pillar">
+        <h2>Snappy</h2>
+        <p>
+          Apps render in &lt; 100 ms once on-screen. Frames are tiny CBOR.
+          The wire format respects the device's actual constraints.
+        </p>
+      </div>
+      <div class="pillar">
+        <h2>Open</h2>
+        <p>
+          Anyone can publish an app. Anyone can run an Exit Node. Anyone can
+          fork the firmware. No fees, no gatekeepers.
+        </p>
+      </div>
+    </section>
+
+    <section id="get-a-device" class="section">
+      <h2>Get a device</h2>
+      <p>
+        PagerOS targets the <strong>LILYGO T-LoRa Pager</strong> (ESP32-S3,
+        480 × 222 IPS screen, QWERTY keyboard, SX1262 LoRa, GPS, NFC).
+        That hardware is available directly from LILYGO. We do not sell or
+        resell devices; we publish the firmware that runs on yours.
+      </p>
+      <ul class="device-options">
+        <li>
+          <strong>Buy the hardware</strong> from LILYGO and flash PagerOS
+          firmware with <code>pagerctl flash</code>. See the
+          <a href="https://docs.pageros.org/user/first-boot/">first-boot guide</a>.
+        </li>
+        <li>
+          <strong>Already have one running Meshtastic?</strong> Dual-boot is
+          supported; the two firmwares share the device but not the air.
+        </li>
+        <li>
+          <strong>No device yet?</strong> The
+          <a href="https://docs.pageros.org/dev/simulator/">desktop simulator</a>
+          renders apps pixel-accurate to the real screen so you can try the
+          ecosystem before buying.
+        </li>
+      </ul>
+    </section>
+
+    <section id="build-an-app" class="section section-alt">
+      <h2>Build an app</h2>
+      <p>
+        Writing a PagerOS app is closer to writing a web handler than to
+        writing firmware. "Hello world" is under 20 lines in Python. Apps
+        run on your own server; the device renders what you return.
+      </p>
+      <pre><code class="lang-python">from pageros import App, Screen, Text
+
+app = App(name="Hello", lora_compatible=True)
+
+@app.screen("/")
+def home(ctx):
+    return Screen(title="Hello", body=[Text(s="Hi from PagerOS.")])
+
+if __name__ == "__main__":
+    app.run(port=8080)</code></pre>
+      <p>
+        Publish to the Marketplace with <code>pagerctl publish</code>, or
+        sideload by URL from any device. See the
+        <a href="https://docs.pageros.org/dev/">developer guide</a> to start.
+      </p>
+    </section>
+
+    <section class="links">
+      <h2>Learn more</h2>
+      <ul>
+        <li><a href="https://docs.pageros.org/user/">User manual</a> — first boot, identity, apps, settings, troubleshooting.</li>
+        <li><a href="https://docs.pageros.org/dev/">Developer guide</a> — SDK, CLI, simulator.</li>
+        <li><a href="https://docs.pageros.org/spec/">Technical spec</a> — protocol, transport, security (v0.2).</li>
+        <li><a href="https://github.com/paperclipai/pager-ecosystem">Source on GitHub</a> — firmware, SDKs, marketplace, exit node, push relay.</li>
+        <li><a href="https://github.com/paperclipai/pager-ecosystem/blob/main/TASKS.md">Roadmap</a> — what's in flight right now.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      PagerOS is an open-source project. Hardware is sold by LILYGO; we are
+      not affiliated. PagerOS is not Meshtastic — see the
+      <a href="https://docs.pageros.org/spec/#16-9-meshtastic-interop">spec</a>
+      for the relationship.
+    </p>
+    <p class="muted">
+      Project name confirmed. Logo and visual identity are placeholders
+      pending a v1 brand pass.
+    </p>
+  </footer>
+</body>
+</html>
