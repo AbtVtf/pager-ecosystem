@@ -17,9 +17,24 @@
 
 #include "pageros_gps.h"
 #include "pageros_input.h"
+#include "pageros_keyboard.h"
 #include "selftest.h"
 
 static const char *TAG = "pageros";
+
+static void kbd_log_task(void *arg)
+{
+    (void)arg;
+    QueueHandle_t q = pageros_kbd_queue();
+    if (!q) vTaskDelete(NULL);
+    while (1) {
+        pageros_kbd_event_t e;
+        if (xQueueReceive(q, &e, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI("kbd", "event: row=%u col=%u %s",
+                     e.row, e.col, e.pressed ? "DOWN" : "UP");
+        }
+    }
+}
 
 static const char *input_event_name(pageros_input_event_t e)
 {
@@ -98,6 +113,16 @@ void app_main(void)
         xTaskCreate(input_log_task, "input_log", 2048, NULL, 4, NULL);
     } else {
         ESP_LOGW(TAG, "input init skipped: %s", esp_err_to_name(input_err));
+    }
+
+    // Keyboard bring-up (FW-006). Same shape as input: log raw matrix
+    // events so the operator can see key presses on the USB monitor.
+    // Keymap translation lives at the shell layer.
+    esp_err_t kbd_err = pageros_kbd_init();
+    if (kbd_err == ESP_OK) {
+        xTaskCreate(kbd_log_task, "kbd_log", 2048, NULL, 4, NULL);
+    } else {
+        ESP_LOGW(TAG, "kbd init skipped: %s", esp_err_to_name(kbd_err));
     }
 
     while (1) {

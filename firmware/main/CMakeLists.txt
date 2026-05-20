@@ -5,6 +5,7 @@ idf_component_register(
         selftest
         gps
         input
+        keyboard
         app_update
         esp_hw_support
         spi_flash
