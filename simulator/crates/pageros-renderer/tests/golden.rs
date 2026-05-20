@@ -121,9 +121,15 @@ fn compare_or_regen(
     regen: bool,
 ) -> Result<(), String> {
     let golden_path = goldens_dir.join(format!("{name}.png"));
-    if regen || !golden_path.exists() {
+    if regen {
         fs::write(&golden_path, fresh_png).map_err(|e| format!("write golden: {e}"))?;
         return Ok(());
+    }
+    if !golden_path.exists() {
+        return Err(format!(
+            "no golden at {} — re-run with RENDERER_REGEN=1 to create it",
+            golden_path.display()
+        ));
     }
     let golden = fs::read(&golden_path).map_err(|e| format!("read golden: {e}"))?;
     let (gw, gh, gbytes) = png_export::decode_png(&golden).map_err(|e| format!("decode golden: {e}"))?;
