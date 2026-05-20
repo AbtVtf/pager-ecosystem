@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pageros-marketplace"
+version = "0.1.0"
+description = "PagerOS marketplace registry — manifest schema, validator, and (future) REST API."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "TBD" }
+authors = [{ name = "PagerOS maintainers" }]
+dependencies = [
+  "pydantic>=2.5,<3",
+  "pyyaml>=6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+]
+
+[project.scripts]
+pageros-marketplace = "pageros_marketplace.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pageros_marketplace*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

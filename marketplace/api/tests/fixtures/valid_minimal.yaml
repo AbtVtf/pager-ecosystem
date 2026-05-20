@@ -1,0 +1,10 @@
+id: notes.mafu.dev
+name: Notes
+description: A simple notepad.
+icon: https://notes.app/icon.png
+url: https://notes.app/
+categories: [productivity]
+maintainer:
+  name: Jane Doe
+  contact: jane@example.com
+version: 1

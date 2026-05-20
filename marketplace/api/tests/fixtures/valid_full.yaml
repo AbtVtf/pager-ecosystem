@@ -1,0 +1,19 @@
+id: notes.mafu.dev
+name: Notes
+description: A simple notepad.
+icon: https://notes.app/icon.png
+url: https://notes.app/
+pubkey: AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=
+permissions:
+  - notifications
+  - location
+lora_compatible: true
+multi_device: false
+donate_url: https://notes.app/tip
+categories:
+  - productivity
+  - utilities
+maintainer:
+  name: Jane Doe
+  contact: jane@example.com
+version: 1
