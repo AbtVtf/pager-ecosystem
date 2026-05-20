@@ -1,5 +1,11 @@
 """PagerOS Python SDK."""
 
+from pageros.codec import (
+    CborDecodeError,
+    CborEncodeError,
+    decode_frame,
+    encode_frame,
+)
 from pageros.encryption import (
     AEAD_KEY_LEN,
     AEAD_NONCE_LEN,
@@ -45,6 +51,8 @@ __all__ = [
     "App",
     "AppKeypair",
     "BadSignature",
+    "CborDecodeError",
+    "CborEncodeError",
     "DEFAULT_MAX_SKEW_SECONDS",
     "DecryptionError",
     "EncryptedRequestMiddleware",
@@ -68,8 +76,10 @@ __all__ = [
     "build_signing_input",
     "check_frame_size",
     "compute_body_hash",
+    "decode_frame",
     "decrypt",
     "derive_session_key",
+    "encode_frame",
     "encrypt",
     "sign_request",
     "verify_request",
