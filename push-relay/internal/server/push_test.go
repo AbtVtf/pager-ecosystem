@@ -17,6 +17,7 @@ import (
 	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
 	"github.com/pageros/pageros/push-relay/internal/pageossig"
+	"github.com/pageros/pageros/push-relay/internal/ratelimit"
 	"github.com/pageros/pageros/push-relay/internal/storage"
 )
 
@@ -458,6 +459,77 @@ func TestPushDoesNotRecordOnFailure(t *testing.T) {
 	}
 	if snap := rig.admin.Snapshot(); len(snap.Apps) != 0 {
 		t.Fatalf("admin store should not record failed sends: %+v", snap)
+	}
+}
+
+// --- PUSH-006: rate-limit overflow returns 429 + Retry-After ------------ //
+
+func TestPushRateLimitOverflowReturns429(t *testing.T) {
+	// Tighten the limit so we don't have to make 60 signed requests.
+	store := storage.NewMemory()
+	lookup := &fakeLookup{keys: map[string]ed25519.PublicKey{}}
+	adm := admin.New()
+	lim := ratelimit.NewMemoryWithLimits(1, 5)
+	srv := New(Options{Storage: store, Manifest: lookup, Admin: adm, Limiter: lim, BuildTag: "test"})
+
+	deviceKey := devicePubkeyForTest(t)
+	_, appPriv := newAppKey(t, sigVectorSeedHex)
+	lookup.keys["notes.mafu.dev"] = appPriv.Public().(ed25519.PublicKey)
+
+	// 1st send fits the bucket.
+	req := signedPush(t, appPriv, "notes.mafu.dev", deviceKey, []byte("a"), time.Now())
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("warmup status = %d", rec.Code)
+	}
+
+	// 2nd is over cap → 429 with Retry-After.
+	req2 := signedPush(t, appPriv, "notes.mafu.dev", deviceKey, []byte("b"), time.Now())
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("overflow status = %d, want 429; body=%s", rec2.Code, rec2.Body.String())
+	}
+	if ra := rec2.Header().Get("Retry-After"); ra == "" {
+		t.Fatalf("missing Retry-After on 429")
+	}
+	// Storage should still hold just the one accepted send.
+	stored, _ := store.List(context.Background(), deviceKey)
+	if len(stored) != 1 {
+		t.Fatalf("expected exactly 1 stored notification, got %d", len(stored))
+	}
+}
+
+// Rate limit must fire AFTER sig verify so a forger can't drain the bucket.
+func TestPushRateLimitNotBurnedByBadSignatures(t *testing.T) {
+	store := storage.NewMemory()
+	lookup := &fakeLookup{keys: map[string]ed25519.PublicKey{}}
+	adm := admin.New()
+	lim := ratelimit.NewMemoryWithLimits(1, 5)
+	srv := New(Options{Storage: store, Manifest: lookup, Admin: adm, Limiter: lim, BuildTag: "test"})
+
+	deviceKey := devicePubkeyForTest(t)
+	_, appPriv := newAppKey(t, sigVectorSeedHex)
+	lookup.keys["notes.mafu.dev"] = appPriv.Public().(ed25519.PublicKey)
+
+	// Send 5 requests with bad sigs — none should consume budget.
+	for i := 0; i < 5; i++ {
+		req := signedPush(t, appPriv, "notes.mafu.dev", deviceKey, []byte("x"), time.Now())
+		// Replace sig with a syntactically-valid garbage sig.
+		req.Header.Set(pageossig.HeaderSig, strings.Repeat("A", 86))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("iter %d: status = %d, want 401", i, rec.Code)
+		}
+	}
+	// Now the legitimate request must still succeed (budget intact).
+	req := signedPush(t, appPriv, "notes.mafu.dev", deviceKey, []byte("ok"), time.Now())
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("legit send after bad-sig burst: status = %d", rec.Code)
 	}
 }
 

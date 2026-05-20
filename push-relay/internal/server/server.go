@@ -10,6 +10,7 @@ import (
 
 	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
+	"github.com/pageros/pageros/push-relay/internal/ratelimit"
 	"github.com/pageros/pageros/push-relay/internal/storage"
 )
 
@@ -28,6 +29,10 @@ type Options struct {
 	// still record volumes; admin routes only mount if AdminToken is set.
 	Admin      *admin.Store
 	AdminToken string
+	// Limiter enforces the per-(app, device) push quotas from SPEC §6.6.4
+	// (PUSH-006). When nil, the server constructs an in-memory limiter with
+	// the default 60/hour + 1000/day caps.
+	Limiter ratelimit.Limiter
 }
 
 type Server struct {
@@ -44,11 +49,14 @@ func New(opts Options) *Server {
 	if opts.Admin == nil {
 		opts.Admin = admin.New()
 	}
+	if opts.Limiter == nil {
+		opts.Limiter = ratelimit.NewMemory()
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", newHealthzHandler(opts.Storage, opts.BuildTag))
 	mux.Handle("GET /pull/{device_pubkey}", newPullHandler(opts.Storage, opts.Logger, 0))
-	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.Logger, 0, opts.MaxPushBytes))
+	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.Limiter, opts.Logger, 0, opts.MaxPushBytes))
 	mux.Handle("DELETE /pull/{device_pubkey}/{notification_id}", newAckHandler(opts.Storage, opts.Logger, 0))
 	admin.Mount(mux, admin.MountConfig{Store: opts.Admin, Token: opts.AdminToken, Logger: opts.Logger})
 

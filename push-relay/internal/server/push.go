@@ -16,6 +16,7 @@ import (
 	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
 	"github.com/pageros/pageros/push-relay/internal/pageossig"
+	"github.com/pageros/pageros/push-relay/internal/ratelimit"
 	"github.com/pageros/pageros/push-relay/internal/storage"
 )
 
@@ -59,7 +60,7 @@ type pushResponse struct {
 //
 // The relay never decrypts the payload — body bytes are stored verbatim
 // (SPEC §6.6.3).
-func newPushHandler(store storage.Store, lookup manifest.Lookup, recorder admin.Recorder, logger *slog.Logger, maxSkew time.Duration, maxBodyBytes int64) http.Handler {
+func newPushHandler(store storage.Store, lookup manifest.Lookup, recorder admin.Recorder, limiter ratelimit.Limiter, logger *slog.Logger, maxSkew time.Duration, maxBodyBytes int64) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -168,6 +169,22 @@ func newPushHandler(store storage.Store, lookup manifest.Lookup, recorder admin.
 		if err := verifyAppSig(r, body, appPubkey, sigHdr, tsHdr, maxSkew, time.Now); err != nil {
 			writePushError(w, logger, http.StatusUnauthorized, "signature verification failed", err)
 			return
+		}
+
+		// Rate limit (SPEC §6.6.4: 60/hr, 1000/day per (app, device)).
+		// Runs AFTER sig verify so a forger can't burn budget on someone
+		// else's tuple; runs BEFORE enqueue so 429s don't displace stored
+		// notifications via the byte cap.
+		if limiter != nil {
+			if ok, retryAfter := limiter.Allow(appID, devicePubkeyStr, time.Now()); !ok {
+				secs := int64(retryAfter / time.Second)
+				if secs < 1 {
+					secs = 1
+				}
+				w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
+				writePushError(w, logger, http.StatusTooManyRequests, "rate limit exceeded", nil)
+				return
+			}
 		}
 
 		// Enqueue the opaque envelope. Per SPEC §6.6.3 the relay never

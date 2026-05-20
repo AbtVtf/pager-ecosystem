@@ -174,6 +174,24 @@ separately.
 - Delegates to `storage.Store.Delete` (already in place from PUSH-005);
   no new storage surface added.
 
+## What this task delivers (PUSH-006)
+
+Per-(app, device) rate limiting in `internal/ratelimit`:
+
+- **60 notifications/hour** and **1,000/day** per (app, device), matching
+  SPEC §6.6.4.
+- Sliding-window in-memory `MemoryLimiter` — beats fixed-window because
+  a malicious sender can't burst 2× the cap across a window boundary.
+- On overflow, `POST /push` responds with **429 Too Many Requests** and
+  a `Retry-After` header (seconds-granularity, rounded up).
+- The rate-limit check runs *after* signature verification so a forger
+  cannot drain a legitimate tuple's budget with bogus signatures.
+
+The limiter is wired via `server.Options.Limiter`; tests inject a
+`NewMemoryWithLimits(...)` instance to keep test cases readable.
+PUSH-007 will instantiate a *second* limiter for group events (SPEC
+§6.6.6 keeps that bucket separate from user-visible notifications).
+
 ## What this task delivers (PUSH-008)
 
 Admin / abuse dashboard surface in `internal/admin`:
