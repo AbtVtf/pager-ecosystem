@@ -1,0 +1,43 @@
+# PUSH-001: dev compose stack for the push relay + storage backend.
+#
+# Brings up:
+#   - redis: queue backend (PUSH-005 will use it for per-device queues with TTL)
+#   - push-relay: the HTTP service
+#
+# Dev TLS: run `./scripts/gen-dev-tls.sh` once to generate ./certs/{cert,key}.pem,
+# then `docker compose up`. Set PUSH_RELAY_TLS_* to empty strings to run plain HTTP.
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+
+  push-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      PUSH_RELAY_ADDR: ":8443"
+      PUSH_RELAY_REDIS_URL: "redis://redis:6379/0"
+      PUSH_RELAY_TLS_CERT: "/certs/cert.pem"
+      PUSH_RELAY_TLS_KEY: "/certs/key.pem"
+      PUSH_RELAY_BUILD_TAG: "dev"
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./certs:/certs:ro
+    restart: unless-stopped
+
+volumes:
+  redis-data:
