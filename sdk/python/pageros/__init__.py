@@ -1,5 +1,6 @@
 """PagerOS Python SDK."""
 
+from pageros.app import App, Request, Response
 from pageros.codec import (
     CborDecodeError,
     CborEncodeError,
@@ -23,7 +24,7 @@ from pageros.encryption import (
     encrypt,
 )
 from pageros.lora_budget import LORA_FRAME_BUDGET_BYTES, check_frame_size
-from pageros.manifest import App, Maintainer
+from pageros.manifest import Maintainer
 from pageros.signing import (
     DEFAULT_MAX_SKEW_SECONDS,
     HEADER_DEVICE,
@@ -66,6 +67,8 @@ __all__ = [
     "Maintainer",
     "MissingEncryptionHeader",
     "MissingHeader",
+    "Request",
+    "Response",
     "SignatureError",
     "SignatureVerifierMiddleware",
     "TimestampSkew",
