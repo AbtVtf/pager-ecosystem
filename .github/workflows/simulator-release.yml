@@ -1,0 +1,126 @@
+name: simulator release
+
+on:
+  push:
+    tags:
+      - "simulator/v*"
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: "Snapshot build (no publish, no signing required)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg,app
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: dmg,app
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: msi,nsis
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: simulator/src-tauri -> target
+          key: release-${{ matrix.target }}
+
+      - name: Install Linux build deps
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf \
+            file
+
+      - name: Resolve release args
+        id: release_args
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.snapshot }}" == "true" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "tag_name=simulator-snapshot-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "release_name=Simulator snapshot ${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            # Tag form: simulator/vX.Y.Z -> X.Y.Z
+            ref="${GITHUB_REF##*/}"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "release_name=PagerOS Simulator $ref" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build, bundle, (sign on macOS), upload to GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing + notarization (set as Actions secrets in repo).
+          # If unset, tauri-action will skip signing and produce an unsigned dmg.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Tauri updater signing key (optional, only if the simulator ships
+          # an in-app updater later).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: simulator
+          tagName: ${{ steps.release_args.outputs.tag_name }}
+          releaseName: ${{ steps.release_args.outputs.release_name }}
+          releaseDraft: false
+          prerelease: ${{ steps.release_args.outputs.prerelease }}
+          includeUpdaterJson: false
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+  publish-download-site:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/simulator/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger simulator.pageros.org/download refresh
+        if: env.PAGES_DEPLOY_HOOK != ''
+        env:
+          PAGES_DEPLOY_HOOK: ${{ secrets.SIMULATOR_PAGES_DEPLOY_HOOK }}
+        run: |
+          curl -fsS -X POST "$PAGES_DEPLOY_HOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag\":\"${GITHUB_REF#refs/tags/}\"}"
+      - name: No deploy hook configured
+        if: env.PAGES_DEPLOY_HOOK == ''
+        env:
+          PAGES_DEPLOY_HOOK: ${{ secrets.SIMULATOR_PAGES_DEPLOY_HOOK }}
+        run: |
+          echo "SIMULATOR_PAGES_DEPLOY_HOOK secret not set; skipping download-site refresh."
+          echo "Configure the secret to auto-refresh simulator.pageros.org/download on tag push."

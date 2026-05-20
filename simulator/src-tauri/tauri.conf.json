@@ -30,13 +30,27 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
+    "active": true,
+    "targets": ["dmg", "app", "appimage", "deb", "msi", "nsis"],
     "category": "DeveloperTool",
+    "publisher": "PagerOS",
+    "homepage": "https://simulator.pageros.org",
     "shortDescription": "Pixel-accurate PagerOS device simulator",
     "longDescription": "Tauri-based desktop simulator that renders PagerOS Frames pixel-identical to the LILYGO T-LoRa Pager (480x222) for app developers.",
     "icon": [
-      "icons/icon.png"
-    ]
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
+    }
   }
 }
