@@ -33,6 +33,7 @@ func New(opts Options) *Server {
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", newHealthzHandler(opts.Storage, opts.BuildTag))
+	mux.Handle("GET /pull/{device_pubkey}", newPullHandler(opts.Storage, opts.Logger, 0))
 
 	s := &Server{
 		opts:   opts,

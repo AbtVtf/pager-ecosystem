@@ -93,5 +93,26 @@ backends share the same observable semantics. The Redis backend uses a
 sorted set keyed by enqueue timestamp and runs the enqueue+eviction step
 inside a Lua script for atomicity.
 
-The actual `/push`, `/pull`, `/ack` HTTP handlers and the signature
-verification / rate limiting paths arrive in PUSH-002..PUSH-004, PUSH-006.
+## What this task delivers (PUSH-003)
+
+`GET /pull/{device_pubkey}` is now wired in (`internal/server/pull.go`):
+
+- Verifies the `PagerOS-Sig` headers (`internal/pageossig/`) against
+  the request method + URL + timestamp + sha256(body) per SPEC §9.2.
+  Rejects with `401 Unauthorized` on missing header, bad encoding,
+  expired timestamp (>5 min skew), failed signature verify, or when
+  the URL pubkey doesn't match the signed pubkey (defense in depth
+  against cross-device pulls).
+- Returns the device's queued notifications in oldest-first order as
+  JSON: `{ notifications: [ { id, kind, app_id, payload (base64),
+  enqueued_at } ] }`.
+- Reads from the `storage.Store` interface added in PUSH-005, so TTL,
+  queue length, and byte-size caps are enforced uniformly.
+
+A standalone `pageossig` package cross-checks the construction against
+the shared `ed25519-pageros-sig-sample` test vector
+(`docs/spec/crypto-test-vectors.json`), keeping the Go relay
+byte-aligned with the Python SDK and firmware libsodium implementation.
+
+The actual `/push` and `/ack` (DELETE) HTTP handlers, plus rate
+limiting, arrive in PUSH-002 / PUSH-004 / PUSH-006.
