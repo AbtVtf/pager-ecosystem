@@ -2,6 +2,7 @@ package lora
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -131,4 +132,59 @@ func TestFragmentVectorsMatch(t *testing.T) {
 			t.Fatalf("want ErrFragOutOfRange, got %v", err)
 		}
 	})
+}
+
+// TestInnerVectorMatches locks the inner-envelope CBOR layout + crypto
+// to an on-disk byte vector that other implementations must reproduce
+// (LORA-003 cross-impl conformance).
+func TestInnerVectorMatches(t *testing.T) {
+	want := readVector(t, "inner_01_seal.hex")
+
+	devPriv := mustHex(t,"77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+	devPub := mustHex(t,"8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+	appPub := mustHex(t,"de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+	seed := mustHex(t,"9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+	edPriv := ed25519.NewKeyFromSeed(seed)
+	plaintext := []byte("hello pageros")
+
+	env, err := Seal(
+		"https://notes.app/save",
+		plaintext,
+		devPub,
+		appPub,
+		devPriv,
+		edPriv,
+		SenderDeviceToApp,
+		7,
+		[]byte{0xDE, 0xAD, 0xBE, 0xEF},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := EncodeInner(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("inner envelope wire mismatch:\n got  %x\n want %x", got, want)
+	}
+
+	// Round-trip: decode the on-disk vector and decrypt with the recipient's
+	// private key, expecting the same plaintext.
+	dec, err := DecodeInner(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appPriv := mustHex(t,"5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
+	gotPT, err := OpenInner(dec, appPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotPT, plaintext) {
+		t.Errorf("decrypted plaintext mismatch: %x vs %x", gotPT, plaintext)
+	}
+	edPub := ed25519.PublicKey(mustHex(t, "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"))
+	if err := VerifyInner(dec, edPub); err != nil {
+		t.Errorf("vector signature did not verify: %v", err)
+	}
 }

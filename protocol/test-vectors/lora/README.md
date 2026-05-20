@@ -67,6 +67,25 @@ outer envelope's `msg_id` groups fragments of one logical message.
 | `neg_frag_01_total_zero.hex` | `total=0` is invalid (must be >= 1). |
 | `neg_frag_02_id_out_of_range.hex` | `frag_id=5` with `total=3` (id must be < total). |
 
+## Inner-envelope vectors (LORA-003)
+
+The inner envelope rides inside the reassembled outer-envelope payload
+(SPEC.md §6.2.2). On the wire it is a CBOR map with five fields:
+
+| Field   | CBOR type | Width  | Notes |
+|---------|-----------|--------|-------|
+| `to`    | tstr      | var    | Target URL, cleartext (Exit Node reads to route + EXIT-003 HTTPS gate). |
+| `from`  | bstr      | 32 B   | Sender X25519 pubkey, cleartext (recipient uses it for ECDH). |
+| `nonce` | bstr      | 16 B   | Bytes 0..11 = SEC-001 §1.2 AEAD nonce (`sender_id_byte`, u64_be counter, 3 zero bytes); bytes 12..15 = sig-binding tail (4 bytes of additional entropy folded into the Ed25519 signature input). |
+| `sig`   | bstr      | 64 B   | Ed25519 signature over `u16_be(len(to)) ‖ to ‖ u32_be(len(body)) ‖ body ‖ nonce` by the sender's Ed25519 key. |
+| `body`  | bstr      | var    | ChaCha20-Poly1305 IETF ciphertext + 16 B Poly1305 tag, with AEAD nonce = `nonce[0..12]`, AAD = `to ‖ from`, key = `HKDF-SHA256(X25519(sender_priv, recipient_pub), salt=zero[32], info="pageros/v1/e2e", L=32)` (SEC-001 §1.1). |
+
+| File | Plaintext | Sender X25519 priv | Recipient X25519 priv | Sender Ed25519 seed | Counter | sigSalt | Notes |
+|---|---|---|---|---|---|---|---|
+| `inner_01_seal.hex` | `"hello pageros"` | RFC 7748 Alice (`77076d…`) | RFC 7748 Bob (`5dab08…`) | RFC 8032 TEST 1 seed (`9d61b1…`) | 7 | `deadbeef` | Reference seal-and-sign. Recipient pubkey is RFC 7748 Bob pub. |
+
+Implementations MUST: (1) reproduce these wire bytes from the inputs, and (2) decode + decrypt + signature-verify with the recipient's X25519 priv and the sender's Ed25519 pub.
+
 ## Reference implementation
 
 `exit-node/internal/lora` (Go). Unit tests in that package encode/decode each
