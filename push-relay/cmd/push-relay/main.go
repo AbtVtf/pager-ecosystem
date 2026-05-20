@@ -18,6 +18,7 @@ import (
 	"net/url"
 
 	"github.com/pageros/pageros/push-relay/internal/config"
+	"github.com/pageros/pageros/push-relay/internal/manifest"
 	"github.com/pageros/pageros/push-relay/internal/server"
 	"github.com/pageros/pageros/push-relay/internal/storage"
 )
@@ -42,11 +43,19 @@ func main() {
 	}
 	defer store.Close()
 
+	var mlookup manifest.Lookup
+	if cfg.MarketplaceURL != "" {
+		mlookup = manifest.NewHTTPClient(cfg.MarketplaceURL, nil)
+	} else {
+		logger.Warn("PUSH_RELAY_MARKETPLACE_URL unset — /push will return 503 for all requests until configured")
+	}
+
 	srv := server.New(server.Options{
 		Addr:     cfg.Addr,
 		TLSCert:  cfg.TLSCertFile,
 		TLSKey:   cfg.TLSKeyFile,
 		Storage:  store,
+		Manifest: mlookup,
 		Logger:   logger,
 		BuildTag: cfg.BuildTag,
 	})
@@ -61,6 +70,7 @@ func main() {
 			"tls", cfg.TLSCertFile != "",
 			"storage", "redis",
 			"redis", redactRedisURL(cfg.RedisURL),
+			"marketplace", cfg.MarketplaceURL,
 		)
 		errs <- srv.ListenAndServe()
 	}()

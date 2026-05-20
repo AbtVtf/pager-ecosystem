@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/pageros/pageros/push-relay/internal/manifest"
 	"github.com/pageros/pageros/push-relay/internal/storage"
 )
 
@@ -16,8 +17,11 @@ type Options struct {
 	TLSCert  string
 	TLSKey   string
 	Storage  storage.Store
+	Manifest manifest.Lookup
 	Logger   *slog.Logger
 	BuildTag string
+	// MaxPushBytes optionally overrides DefaultMaxPushBytes for POST /push.
+	MaxPushBytes int64
 }
 
 type Server struct {
@@ -34,6 +38,7 @@ func New(opts Options) *Server {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", newHealthzHandler(opts.Storage, opts.BuildTag))
 	mux.Handle("GET /pull/{device_pubkey}", newPullHandler(opts.Storage, opts.Logger, 0))
+	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Logger, 0, opts.MaxPushBytes))
 
 	s := &Server{
 		opts:   opts,

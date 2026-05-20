@@ -55,6 +55,7 @@ service logs a warning — production deployments must set them).
 | `PUSH_RELAY_TLS_KEY`   | _(unset)_                     | PEM key path; required with TLS_CERT   |
 | `PUSH_RELAY_REDIS_URL` | `redis://localhost:6379/0`    | `redis://` or `rediss://`              |
 | `PUSH_RELAY_BUILD_TAG` | `dev`                         | Surfaced in `/healthz` for ops sanity  |
+| `PUSH_RELAY_MARKETPLACE_URL` | _(unset)_               | Registry root (e.g. `https://market.pageros.org`). When unset, `POST /push` returns 503 — the relay has no way to verify app signatures without it. |
 
 ## Test
 
@@ -116,3 +117,42 @@ byte-aligned with the Python SDK and firmware libsodium implementation.
 
 The actual `/push` and `/ack` (DELETE) HTTP handlers, plus rate
 limiting, arrive in PUSH-002 / PUSH-004 / PUSH-006.
+
+## What this task delivers (PUSH-002)
+
+`POST /push/{device_pubkey}` is wired in (`internal/server/push.go`):
+
+- Reads the opaque encrypted envelope from the request body (capped at
+  `DefaultMaxPushBytes` = 64 KiB by default, overridable via
+  `Options.MaxPushBytes`). The relay never decrypts (SPEC §6.6.3).
+- Looks up the sender app's signing pubkey from the marketplace registry
+  (`internal/manifest`, hitting `GET {PUSH_RELAY_MARKETPLACE_URL}/apps/{app_id}`).
+  Unknown apps → **403 Forbidden** per SPEC §6.6.2. Registry unreachable →
+  **503 Service Unavailable** so callers retry with backoff.
+- Verifies the request's `PagerOS-Sig` (Ed25519 over
+  `method || url || timestamp || sha256(body)`, SPEC §9.2) against the
+  resolved app pubkey. Sig failures → **401 Unauthorized**.
+- Enqueues the payload via the `storage.Store` interface (TTL + queue
+  caps from PUSH-005 apply).
+
+Request headers:
+
+| Header              | Required | Notes                                           |
+| ------------------- | -------- | ----------------------------------------------- |
+| `PagerOS-App`       | yes      | Sender app id (reverse-DNS, matches manifest id) |
+| `PagerOS-Sig`       | yes      | base64url Ed25519 sig                            |
+| `PagerOS-Timestamp` | yes      | Unix seconds, ±5 min skew                        |
+
+Response (`202 Accepted`):
+
+```json
+{ "id": "<server-assigned notification id>", "enqueued_at": 1715000000 }
+```
+
+Note on the manifest pubkey field: SPEC §10.2 documents the manifest
+`pubkey` as X25519 (for E2E encryption), while §6.6.2 says the relay
+verifies an Ed25519 sig against the manifest pubkey. The marketplace
+registry currently stores a single 32-byte pubkey; this implementation
+verifies against whatever the registry returns. Resolving the
+"one key vs two" inconsistency is a marketplace concern tracked
+separately.
