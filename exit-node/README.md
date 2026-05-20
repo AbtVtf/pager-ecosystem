@@ -4,12 +4,13 @@ PagerOS LoRa ↔ HTTPS bridge. Reference implementation in Go (SPEC §11).
 
 ## Status
 
-EXIT-001 (skeleton + config). Subsequent tasks layer in:
-
-- EXIT-002 — LoRa RX/TX loop
-- EXIT-003 — HTTPS proxy
+- EXIT-001 — skeleton + config ✅
+- EXIT-002 — LoRa RX/TX loop ✅ (library in `internal/lora`; not yet
+  wired in `cmd/exit-node` because no production `PacketTransceiver`
+  framing exists for the USB modem)
+- EXIT-003 — HTTPS proxy ✅ (`internal/proxy`; implements `lora.Handler`)
 - EXIT-004 — Per-device rate limiter
-- EXIT-005 — Advertise packets
+- EXIT-005 — Advertise packets ✅ (wired in `cmd/exit-node`)
 - EXIT-006 — Response caching
 - EXIT-007 — Stats publisher
 - EXIT-008 — Pi image + Docker + .deb
@@ -45,5 +46,7 @@ exit-node/
 ├── configs/              # example YAML config
 └── internal/
     ├── config/           # YAML loader + validation
-    └── lora/             # envelope codec (LORA-001) + serial device wrapper
+    ├── lora/             # envelope codec, fragmentation, inner envelope,
+    │                     # RX/TX loop, advertiser, tracker
+    └── proxy/            # EXIT-003 HTTPS forwarder (lora.Handler impl)
 ```
