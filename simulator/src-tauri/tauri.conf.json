@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PagerOS Simulator",
+  "version": "0.1.0",
+  "identifier": "org.pageros.simulator",
+  "build": {
+    "frontendDist": "../src",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PagerOS Simulator",
+        "width": 480,
+        "height": 222,
+        "minWidth": 480,
+        "minHeight": 222,
+        "maxWidth": 480,
+        "maxHeight": 222,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Pixel-accurate PagerOS device simulator",
+    "longDescription": "Tauri-based desktop simulator that renders PagerOS Frames pixel-identical to the LILYGO T-LoRa Pager (480x222) for app developers.",
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

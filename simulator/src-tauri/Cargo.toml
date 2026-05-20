@@ -1,0 +1,22 @@
+[package]
+name = "pageros-simulator"
+version = "0.1.0"
+description = "PagerOS Simulator (Tauri shell)"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "pageros_simulator_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "pageros-simulator"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
