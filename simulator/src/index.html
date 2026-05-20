@@ -5,29 +5,186 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PagerOS Simulator</title>
     <style>
+      :root {
+        --device-w: 480px;
+        --device-h: 222px;
+      }
       html, body {
         margin: 0;
         padding: 0;
-        width: 480px;
-        height: 222px;
+        width: var(--device-w);
+        height: var(--device-h);
         background: #000;
         overflow: hidden;
-        font-family: sans-serif;
-        color: #888;
+        color: #d0d0d0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
-      .placeholder {
-        width: 100%;
-        height: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 11px;
+      #screen {
+        position: absolute;
+        inset: 0;
+        width: var(--device-w);
+        height: var(--device-h);
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+      #hint {
+        position: absolute;
+        right: 4px;
+        bottom: 2px;
+        font-size: 9px;
+        color: rgba(255, 255, 255, 0.35);
+        background: rgba(0, 0, 0, 0.35);
+        padding: 0 3px;
+        pointer-events: none;
         letter-spacing: 0.05em;
-        text-transform: uppercase;
       }
+      #status {
+        position: absolute;
+        left: 4px;
+        bottom: 2px;
+        font-size: 9px;
+        color: rgba(255, 255, 255, 0.45);
+        background: rgba(0, 0, 0, 0.35);
+        padding: 0 3px;
+        pointer-events: none;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #picker {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        max-height: 60%;
+        background: rgba(0, 0, 0, 0.92);
+        overflow-y: auto;
+        font-size: 10px;
+        display: none;
+        border-bottom: 1px solid #333;
+      }
+      #picker.open { display: block; }
+      #picker .row {
+        padding: 2px 6px;
+        white-space: nowrap;
+        cursor: pointer;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #picker .row:hover { background: #103060; }
+      #picker .row.cat { color: #8be1ff; padding-top: 4px; cursor: default; }
+      #picker .row.cat:hover { background: transparent; }
     </style>
   </head>
   <body>
-    <div class="placeholder">PagerOS Simulator — SIM-001 shell</div>
+    <img id="screen" alt="device screen" />
+    <div id="picker" role="listbox" aria-label="PROTO-003 vectors"></div>
+    <div id="status">…</div>
+    <div id="hint">←/→ cycle · p picker · r reload</div>
+    <script type="module">
+      const { invoke } = window.__TAURI__.core;
+
+      const screen = document.getElementById('screen');
+      const status = document.getElementById('status');
+      const picker = document.getElementById('picker');
+      const hint   = document.getElementById('hint');
+
+      let vectors = [];
+      let index = 0;
+
+      async function loadVectors() {
+        try {
+          vectors = await invoke('list_vectors');
+        } catch (err) {
+          status.textContent = `list error: ${err}`;
+          return;
+        }
+        if (vectors.length === 0) {
+          status.textContent = 'no vectors found';
+          return;
+        }
+        // Default to widget_text_minimal_string if present.
+        const preferred = vectors.findIndex(
+          (v) => v.name === 'widget_text_minimal_string',
+        );
+        if (preferred >= 0) index = preferred;
+        renderPicker();
+        await renderCurrent();
+      }
+
+      function renderPicker() {
+        picker.innerHTML = '';
+        let lastCategory = '';
+        vectors.forEach((v, i) => {
+          if (v.category !== lastCategory) {
+            const cat = document.createElement('div');
+            cat.className = 'row cat';
+            cat.textContent = `── ${v.category} ──`;
+            picker.appendChild(cat);
+            lastCategory = v.category;
+          }
+          const row = document.createElement('div');
+          row.className = 'row';
+          row.dataset.idx = String(i);
+          row.textContent = `${v.name} [${v.kind}]`;
+          row.onclick = () => {
+            index = i;
+            picker.classList.remove('open');
+            renderCurrent();
+          };
+          picker.appendChild(row);
+        });
+      }
+
+      async function renderCurrent() {
+        const v = vectors[index];
+        if (!v) return;
+        try {
+          const result = await invoke('render_vector', { name: v.name });
+          screen.src = `data:image/png;base64,${result.png_b64}`;
+          const errSuffix = result.decode_error
+            ? ` ! ${result.decode_error}`
+            : '';
+          status.textContent = `${index + 1}/${vectors.length} ${v.name}${errSuffix}`;
+        } catch (err) {
+          status.textContent = `render error: ${err}`;
+        }
+      }
+
+      window.addEventListener('keydown', (ev) => {
+        if (vectors.length === 0) return;
+        if (picker.classList.contains('open') && ev.key === 'Escape') {
+          picker.classList.remove('open');
+          ev.preventDefault();
+          return;
+        }
+        switch (ev.key) {
+          case 'ArrowRight':
+          case 'j':
+            index = (index + 1) % vectors.length;
+            renderCurrent();
+            ev.preventDefault();
+            break;
+          case 'ArrowLeft':
+          case 'k':
+            index = (index - 1 + vectors.length) % vectors.length;
+            renderCurrent();
+            ev.preventDefault();
+            break;
+          case 'r':
+            renderCurrent();
+            ev.preventDefault();
+            break;
+          case 'p':
+            picker.classList.toggle('open');
+            ev.preventDefault();
+            break;
+          case 'h':
+            hint.style.display = hint.style.display === 'none' ? '' : 'none';
+            status.style.display = hint.style.display;
+            ev.preventDefault();
+            break;
+        }
+      });
+
+      loadVectors();
+    </script>
   </body>
 </html>

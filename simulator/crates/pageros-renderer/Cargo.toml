@@ -1,0 +1,29 @@
+[package]
+name = "pageros-renderer"
+version = "0.1.0"
+description = "Pixel-accurate PagerOS Frame renderer (RGB565 framebuffer, ASCII-safe). Shared crate between the Tauri simulator and the ESP32 firmware reference renderer."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "pageros_renderer"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Enables std-only helpers (CBOR decoding from std::io::Read, PNG export).
+std = ["ciborium/std", "ciborium-io/std", "dep:png"]
+
+[dependencies]
+ciborium = { version = "0.2", default-features = false }
+ciborium-io = { version = "0.2", default-features = false }
+png = { version = "0.17", optional = true }
+
+[dev-dependencies]
+png = "0.17"
+
+[[bin]]
+name = "render-vector"
+path = "src/bin/render_vector.rs"
+required-features = ["std"]

@@ -20,3 +20,5 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+pageros-renderer = { path = "../crates/pageros-renderer", features = ["std"] }
+base64 = "0.22"
