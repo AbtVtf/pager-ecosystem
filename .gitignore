@@ -1,0 +1,65 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.yarn/
+*.tsbuildinfo
+
+# Go
+*.exe
+*.test
+*.prof
+/cli/cli
+/exit-node/exit-node
+/push-relay/push-relay
+
+# Rust / Tauri
+target/
+Cargo.lock
+simulator/src-tauri/target/
+
+# ESP-IDF
+firmware/build/
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+identity.key
+
+# Logs
+*.log
+
+# Cache
+.cache/
+
+# Agent workspaces
+/.agents/
