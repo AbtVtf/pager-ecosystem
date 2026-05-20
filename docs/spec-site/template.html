@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{TITLE}} — {{SITE_TITLE}}</title>
+  <meta name="description" content="{{SITE_TAGLINE}}" />
+  <meta property="og:title" content="{{TITLE}} — {{SITE_TITLE}}" />
+  <meta property="og:description" content="{{SITE_TAGLINE}}" />
+  <meta property="og:type" content="website" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a class="logo" href="index.html" aria-label="PagerOS spec home">
+      <span class="logo-mark" aria-hidden="true">§</span>
+      <span class="logo-text">{{SITE_TITLE}}</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="https://pageros.org/">pageros.org</a>
+      <a href="https://docs.pageros.org/">Docs</a>
+      <a href="https://github.com/paperclipai/pager-ecosystem">Source</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    {{SIDEBAR}}
+    <main class="content">
+      <article class="markdown">
+        {{BODY}}
+      </article>
+      <footer class="page-meta">
+        <p>
+          Source: <a href="{{SOURCE_URL}}"><code>{{SOURCE_LABEL}}</code></a>
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <p>{{SITE_TAGLINE}}.</p>
+    <p class="muted">
+      Built from the <a href="https://github.com/paperclipai/pager-ecosystem">pager-ecosystem</a>
+      repository. On any disagreement, the markdown sources win.
+    </p>
+  </footer>
+</body>
+</html>
