@@ -1,0 +1,57 @@
+name: pagerctl ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-ci.yml"
+      - ".github/workflows/cli-release.yml"
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-ci.yml"
+      - ".github/workflows/cli-release.yml"
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: cli/go.sum
+      - name: Build
+        working-directory: cli
+        run: go build ./...
+      - name: Test
+        working-directory: cli
+        run: go test ./...
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: cli/go.sum
+      - name: GoReleaser check (snapshot)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          workdir: cli
+          args: release --snapshot --clean --skip=publish
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: dummy
+          SCOOP_BUCKET_GITHUB_TOKEN: dummy

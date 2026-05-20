@@ -1,0 +1,63 @@
+name: pagerctl release
+
+on:
+  push:
+    tags:
+      - "cli/v*"
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: "Run a snapshot build (no publish)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: cli/go.sum
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          workdir: cli
+          args: >-
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.snapshot)
+                && 'release --snapshot --clean --skip=publish'
+                || 'release --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
+
+  build-check:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: cli/go.sum
+      - name: Build
+        working-directory: cli
+        run: go build ./...
+      - name: Test
+        working-directory: cli
+        run: go test ./...

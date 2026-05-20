@@ -1,0 +1,121 @@
+# GoReleaser config for pagerctl — see https://goreleaser.com
+# Acceptance: produces installable artifacts for macOS, Linux, Windows.
+version: 2
+
+project_name: pagerctl
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: pagerctl
+    main: ./cmd/pagerctl
+    binary: pagerctl
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- if eq .Os "darwin" }}macos{{ else }}{{ .Os }}{{ end }}_
+      {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+# Linux packages (.deb / .rpm / .apk) via nfpm.
+nfpms:
+  - id: pagerctl
+    package_name: pagerctl
+    vendor: PagerOS
+    homepage: https://pageros.io
+    maintainer: PagerOS Maintainers <maintainers@pageros.io>
+    description: |-
+      pagerctl — the PagerOS command-line tool for scaffolding, running,
+      flashing, and publishing PagerOS apps.
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    section: utils
+
+# Homebrew tap formula (macOS + Linux).
+# Requires a `pageros/homebrew-tap` repo and HOMEBREW_TAP_GITHUB_TOKEN secret.
+brews:
+  - name: pagerctl
+    repository:
+      owner: pageros
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://pageros.io
+    description: PagerOS command-line tool
+    license: Apache-2.0
+    install: |
+      bin.install "pagerctl"
+    test: |
+      system "#{bin}/pagerctl", "version"
+
+# Scoop bucket manifest for Windows.
+# Requires a `pageros/scoop-bucket` repo and SCOOP_BUCKET_GITHUB_TOKEN secret.
+scoops:
+  - name: pagerctl
+    repository:
+      owner: pageros
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    homepage: https://pageros.io
+    description: PagerOS command-line tool
+    license: Apache-2.0
+
+release:
+  github:
+    owner: pageros
+    name: pageros
+  draft: false
+  prerelease: auto
+  name_template: "pagerctl {{ .Tag }}"
+  header: |
+    # pagerctl {{ .Tag }}
+
+    Install:
+    - macOS / Linux: `brew install pageros/tap/pagerctl`
+    - Debian / Ubuntu: download the `.deb` from this release and `apt install ./pagerctl_*.deb`
+    - Windows: `scoop bucket add pageros https://github.com/pageros/scoop-bucket && scoop install pagerctl`

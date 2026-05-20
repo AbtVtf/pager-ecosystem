@@ -1,0 +1,6 @@
+# GoReleaser output
+/dist/
+
+# Local build artifacts
+/pagerctl
+/pagerctl.exe
