@@ -7,8 +7,8 @@ Server-side of the PagerOS marketplace registry (SPEC.md §10).
 | MKT-001 | YAML manifest schema + validator | done |
 | MKT-002 | Registry REST API (CRUD apps, list, search) + OpenAPI doc | done |
 | MKT-003 | DNS TXT publish-time challenge service | done |
+| MKT-006 | Moderation queue + trust tagging + admin UI | done |
 | MKT-011 | Deployment artifacts + ops plan (registry portion) | scaffolded, see `DEPLOYMENT.md` |
-| MKT-006 | Moderation queue + trust tagging | upcoming |
 
 ## Install (dev)
 
@@ -88,6 +88,38 @@ Tokens default to a 1-hour issuance TTL and a 24-hour post-verification TTL.
 Live DNS resolution uses `dnspython`; tests inject `FakeResolver` via
 `create_app(..., dns_resolver=FakeResolver())`. To opt out of the gate for
 embedded/local-dev setups, pass `challenge_required=False` to `create_app`.
+
+### Moderation queue + admin tooling (MKT-006)
+
+Open registration plus post-hoc moderation per SPEC §10.5. Any user may
+`POST /reports` against an existing app; admins consume the queue.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/reports` | none | File a report against an app (`{app_id, reason, reporter_contact?}`). |
+| `GET` | `/admin/reports` | admin | List reports; filter by `status` (`open`/`resolved`/`dismissed`) and `app_id`. |
+| `GET` | `/admin/reports/{id}` | admin | Inspect a single report. |
+| `POST` | `/admin/reports/{id}/resolve` | admin | Close a report as actioned. |
+| `POST` | `/admin/reports/{id}/dismiss` | admin | Close a report as not actionable. |
+| `PUT` | `/admin/apps/{app_id}/tags` | admin | Replace the full trust-tag set. |
+| `POST` | `/admin/apps/{app_id}/tags/{tag}` | admin | Add one trust tag (idempotent). |
+| `DELETE` | `/admin/apps/{app_id}/tags/{tag}` | admin | Remove one trust tag (idempotent). |
+| `DELETE` | `/apps/{app_id}` | admin | Remove an app (logged to the moderation log). |
+| `GET` | `/admin/log` | admin | Append-only moderation action log. |
+| `GET` | `/admin/ui` | admin | Server-rendered moderation dashboard (HTML). |
+
+Trust tags are an exclusive allowlist (SPEC §10.5): `verified`, `featured`,
+`flagged`. `unverified` is implicit (no `verified` tag applied). Tags are
+admin-only; ordinary publish flow lands an app with `tags=[]`.
+
+Admin auth: pass `admin_token="…"` to `create_app(…)`. Requests must then
+include `Authorization: Bearer <token>`. When `admin_token` is `None` (the
+default), the admin surface is unauthenticated — useful for tests and local
+development but **must** be set in production.
+
+Every admin mutation (tag add/remove/set, app delete, report
+resolve/dismiss) appends an entry to the in-memory action log. MKT-008 will
+expose this log read-only at `GET /moderation/log`.
 
 ### Run locally
 

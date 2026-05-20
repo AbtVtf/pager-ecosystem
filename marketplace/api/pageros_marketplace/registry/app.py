@@ -1,11 +1,14 @@
-"""FastAPI app factory for the marketplace registry (MKT-002 + MKT-003)."""
+"""FastAPI app factory for the marketplace registry (MKT-002 + MKT-003 + MKT-006)."""
 
 from __future__ import annotations
 
+import secrets
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ..manifest import Manifest, ManifestValidationError, validate_manifest
+from .admin_ui import render_admin_index
 from .challenges import (
     ChallengeAlreadyConsumedError,
     ChallengeAppIdMismatchError,
@@ -18,16 +21,30 @@ from .challenges import (
     UnknownChallengeError,
 )
 from .dns_resolver import DnsLookupError, DnsResolver, DnspythonResolver
+from .moderation import (
+    ModerationStore,
+    ReportAlreadyClosedError,
+    ReportStatus,
+    UnknownReportError,
+    coerce_report_status,
+)
 from .schemas import (
     AppRecord,
     ChallengeRecord,
     ChallengeRequest,
     ErrorField,
     ErrorResponse,
+    LogRecord,
     Page,
+    ReportRecord,
+    ReportRequest,
+    ReportResolutionRequest,
+    TagSetRequest,
 )
 from .store import (
+    ALLOWED_TAGS,
     DuplicateAppError,
+    InvalidTagError,
     Registry,
     UnknownAppError,
     VersionNotIncreasedError,
@@ -38,13 +55,15 @@ _APP_ID_PATTERN = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9]
 
 _ERROR_RESPONSES: dict[int | str, dict] = {
     400: {"model": ErrorResponse, "description": "Manifest validation failed"},
+    401: {"model": ErrorResponse, "description": "Admin auth missing or invalid"},
     403: {"model": ErrorResponse, "description": "DNS TXT challenge not satisfied"},
-    404: {"model": ErrorResponse, "description": "App or challenge not found"},
+    404: {"model": ErrorResponse, "description": "App, challenge, or report not found"},
     409: {"model": ErrorResponse, "description": "App already registered"},
     422: {"model": ErrorResponse, "description": "Request body could not be parsed"},
 }
 
 _CHALLENGE_HEADER = "X-Challenge-Token"
+_ADMIN_AUTH_SCHEME = "Bearer"
 
 
 def create_app(
@@ -53,6 +72,8 @@ def create_app(
     challenges: ChallengeStore | None = None,
     dns_resolver: DnsResolver | None = None,
     challenge_required: bool = True,
+    moderation: ModerationStore | None = None,
+    admin_token: str | None = None,
 ) -> FastAPI:
     """Build a FastAPI app backed by ``registry``.
 
@@ -73,26 +94,37 @@ def create_app(
         ``X-Challenge-Token`` header bound to a verified challenge for the
         manifest URL's host. Set to ``False`` in tests or local-dev setups
         that pre-date the challenge gate.
+    moderation:
+        Store for user reports + the admin action log (MKT-006 / MKT-008).
+        Defaults to a fresh in-memory store.
+    admin_token:
+        Bearer token required by the ``/admin/...`` endpoints. When ``None``,
+        the admin surface is unauthenticated (useful for tests and local
+        development). Production deployments MUST set a non-empty token.
     """
     registry = registry if registry is not None else Registry()
     resolver = dns_resolver if dns_resolver is not None else DnspythonResolver()
     challenge_store = (
         challenges if challenges is not None else ChallengeStore(resolver)
     )
+    moderation_store = moderation if moderation is not None else ModerationStore()
 
     app = FastAPI(
         title="PagerOS Marketplace Registry",
-        version="0.2.0",
+        version="0.3.0",
         summary="Registry REST API for PagerOS apps (SPEC §10).",
         description=(
-            "Implements MKT-002 (registry CRUD + search) and MKT-003 (DNS TXT "
-            "publish-time challenge). Moderation tagging (MKT-006) layers on "
-            "top of this surface in later tasks."
+            "Implements MKT-002 (registry CRUD + search), MKT-003 (DNS TXT "
+            "publish-time challenge), and MKT-006 (moderation queue + admin "
+            "tooling). The admin surface lives under `/admin` and is gated by "
+            "an admin bearer token."
         ),
     )
     app.state.registry = registry
     app.state.challenges = challenge_store
     app.state.challenge_required = challenge_required
+    app.state.moderation = moderation_store
+    app.state.admin_token = admin_token or None
 
     _register_exception_handlers(app)
     _register_routes(app)
@@ -112,6 +144,42 @@ def _get_challenges(request: Request) -> ChallengeStore:
 
 def _challenge_required(request: Request) -> bool:
     return bool(request.app.state.challenge_required)
+
+
+def _get_moderation(request: Request) -> ModerationStore:
+    return request.app.state.moderation
+
+
+def _require_admin(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> str:
+    """Verify the admin bearer token and return the caller's actor name.
+
+    When ``admin_token`` is unset (test / local-dev mode), the admin surface
+    is unauthenticated and the actor is reported as ``"local"``.
+    """
+    configured = request.app.state.admin_token
+    if not configured:
+        return "local"
+    if not authorization:
+        raise _admin_unauthorized("missing Authorization header")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != _ADMIN_AUTH_SCHEME.lower() or not token:
+        raise _admin_unauthorized(
+            f"expected {_ADMIN_AUTH_SCHEME} authorization scheme"
+        )
+    if not secrets.compare_digest(token.strip(), configured):
+        raise _admin_unauthorized("invalid admin token")
+    return "admin"
+
+
+def _admin_unauthorized(detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"error": "admin_unauthorized", "detail": detail},
+        headers={"WWW-Authenticate": _ADMIN_AUTH_SCHEME},
+    )
 
 
 # --- routes ---------------------------------------------------------------- #
@@ -380,17 +448,390 @@ def _register_routes(app: FastAPI) -> None:
         "/apps/{app_id}",
         tags=["apps"],
         status_code=status.HTTP_204_NO_CONTENT,
-        responses={404: _ERROR_RESPONSES[404]},
-        summary="Delete an app",
+        responses={
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Delete an app (admin)",
+        description=(
+            "Removes an app from the registry. Requires admin bearer auth "
+            "when an admin token is configured. Logs an `app.delete` action "
+            "to the moderation log."
+        ),
     )
     def delete_app(
         app_id: str = Path(pattern=_APP_ID_PATTERN, examples=["notes.mafu.dev"]),
         registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
     ) -> None:
         try:
             registry.delete(app_id)
         except UnknownAppError as exc:
             raise _not_found(exc) from exc
+        moderation.log(action="app.delete", actor=actor, app_id=app_id)
+
+    # --- public reports ----------------------------------------------------- #
+
+    @app.post(
+        "/reports",
+        tags=["moderation"],
+        status_code=status.HTTP_201_CREATED,
+        response_model=ReportRecord,
+        responses={404: _ERROR_RESPONSES[404], 422: _ERROR_RESPONSES[422]},
+        summary="File a report against an app",
+        description=(
+            "Anyone (no auth) may file a report. The reported `app_id` must "
+            "already exist in the registry. Reports enter the Trust & Safety "
+            "queue (`status=open`) until an admin resolves or dismisses them."
+        ),
+    )
+    def file_report(
+        body: ReportRequest,
+        registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+    ) -> ReportRecord:
+        try:
+            registry.get(body.app_id)
+        except UnknownAppError as exc:
+            raise _not_found(exc) from exc
+        report = moderation.file_report(
+            app_id=body.app_id,
+            reason=body.reason,
+            reporter_contact=body.reporter_contact,
+        )
+        moderation.log(
+            action="report.file",
+            actor="anonymous",
+            app_id=body.app_id,
+            details={"report_id": report.id},
+        )
+        return ReportRecord.from_report(report)
+
+    # --- admin: reports ----------------------------------------------------- #
+
+    @app.get(
+        "/admin/reports",
+        tags=["admin"],
+        response_model=Page[ReportRecord],
+        responses={401: _ERROR_RESPONSES[401]},
+        summary="List reports (admin)",
+    )
+    def admin_list_reports(
+        status_filter: str | None = Query(
+            None,
+            alias="status",
+            description="Filter by report status: open, resolved, dismissed.",
+        ),
+        app_id: str | None = Query(None),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(50, ge=1, le=200),
+        moderation: ModerationStore = Depends(_get_moderation),
+        _actor: str = Depends(_require_admin),
+    ) -> Page[ReportRecord]:
+        try:
+            parsed_status = coerce_report_status(status_filter)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "invalid_status", "detail": str(exc)},
+            ) from exc
+        reports, total = moderation.list_reports(
+            status=parsed_status,
+            app_id=app_id,
+            offset=offset,
+            limit=limit,
+        )
+        return Page[ReportRecord](
+            items=[ReportRecord.from_report(r) for r in reports],
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
+
+    @app.get(
+        "/admin/reports/{report_id}",
+        tags=["admin"],
+        response_model=ReportRecord,
+        responses={
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Get a report (admin)",
+    )
+    def admin_get_report(
+        report_id: str = Path(min_length=1, max_length=64),
+        moderation: ModerationStore = Depends(_get_moderation),
+        _actor: str = Depends(_require_admin),
+    ) -> ReportRecord:
+        try:
+            return ReportRecord.from_report(moderation.get_report(report_id))
+        except UnknownReportError as exc:
+            raise _report_not_found(exc) from exc
+
+    @app.post(
+        "/admin/reports/{report_id}/resolve",
+        tags=["admin"],
+        response_model=ReportRecord,
+        responses={
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+            409: {"model": ErrorResponse, "description": "Report already closed"},
+        },
+        summary="Resolve a report (admin)",
+        description=(
+            "Marks the report `resolved`. Use this when the admin took an "
+            "action on the reported app (tag change, removal) or otherwise "
+            "agrees with the reporter."
+        ),
+    )
+    def admin_resolve_report(
+        body: ReportResolutionRequest,
+        report_id: str = Path(min_length=1, max_length=64),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
+    ) -> ReportRecord:
+        return _close_report_route(
+            moderation,
+            report_id=report_id,
+            actor=actor,
+            note=body.note,
+            action="resolve",
+        )
+
+    @app.post(
+        "/admin/reports/{report_id}/dismiss",
+        tags=["admin"],
+        response_model=ReportRecord,
+        responses={
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+            409: {"model": ErrorResponse, "description": "Report already closed"},
+        },
+        summary="Dismiss a report (admin)",
+        description=(
+            "Marks the report `dismissed`. Use this when the report is not "
+            "actionable (spam, no policy violation)."
+        ),
+    )
+    def admin_dismiss_report(
+        body: ReportResolutionRequest,
+        report_id: str = Path(min_length=1, max_length=64),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
+    ) -> ReportRecord:
+        return _close_report_route(
+            moderation,
+            report_id=report_id,
+            actor=actor,
+            note=body.note,
+            action="dismiss",
+        )
+
+    # --- admin: trust tags -------------------------------------------------- #
+
+    @app.put(
+        "/admin/apps/{app_id}/tags",
+        tags=["admin"],
+        response_model=AppRecord,
+        responses={
+            400: _ERROR_RESPONSES[400],
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Replace trust tags (admin)",
+        description=(
+            "Replaces the full set of trust tags on an app. Allowed tags: "
+            f"{sorted(ALLOWED_TAGS)}."
+        ),
+    )
+    def admin_set_tags(
+        body: TagSetRequest,
+        app_id: str = Path(pattern=_APP_ID_PATTERN, examples=["notes.mafu.dev"]),
+        registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
+    ) -> AppRecord:
+        try:
+            entry = registry.set_tags(app_id, body.tags)
+        except UnknownAppError as exc:
+            raise _not_found(exc) from exc
+        except InvalidTagError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "invalid_tag", "detail": str(exc)},
+            ) from exc
+        moderation.log(
+            action="app.tags.set",
+            actor=actor,
+            app_id=app_id,
+            details={"tags": list(entry.tags)},
+        )
+        return AppRecord.from_entry(entry)
+
+    @app.post(
+        "/admin/apps/{app_id}/tags/{tag}",
+        tags=["admin"],
+        response_model=AppRecord,
+        responses={
+            400: _ERROR_RESPONSES[400],
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Add a single trust tag (admin)",
+    )
+    def admin_add_tag(
+        app_id: str = Path(pattern=_APP_ID_PATTERN, examples=["notes.mafu.dev"]),
+        tag: str = Path(min_length=1, max_length=32),
+        registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
+    ) -> AppRecord:
+        try:
+            entry = registry.add_tag(app_id, tag)
+        except UnknownAppError as exc:
+            raise _not_found(exc) from exc
+        except InvalidTagError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "invalid_tag", "detail": str(exc)},
+            ) from exc
+        moderation.log(
+            action="app.tag.add",
+            actor=actor,
+            app_id=app_id,
+            details={"tag": tag},
+        )
+        return AppRecord.from_entry(entry)
+
+    @app.delete(
+        "/admin/apps/{app_id}/tags/{tag}",
+        tags=["admin"],
+        response_model=AppRecord,
+        responses={
+            401: _ERROR_RESPONSES[401],
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Remove a single trust tag (admin)",
+    )
+    def admin_remove_tag(
+        app_id: str = Path(pattern=_APP_ID_PATTERN, examples=["notes.mafu.dev"]),
+        tag: str = Path(min_length=1, max_length=32),
+        registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+        actor: str = Depends(_require_admin),
+    ) -> AppRecord:
+        try:
+            entry = registry.remove_tag(app_id, tag)
+        except UnknownAppError as exc:
+            raise _not_found(exc) from exc
+        moderation.log(
+            action="app.tag.remove",
+            actor=actor,
+            app_id=app_id,
+            details={"tag": tag},
+        )
+        return AppRecord.from_entry(entry)
+
+    # --- admin: action log -------------------------------------------------- #
+
+    @app.get(
+        "/admin/log",
+        tags=["admin"],
+        response_model=Page[LogRecord],
+        responses={401: _ERROR_RESPONSES[401]},
+        summary="Read the moderation action log (admin)",
+        description=(
+            "Append-only log of admin actions and report events. MKT-008 will "
+            "publish this read-only at `GET /moderation/log`."
+        ),
+    )
+    def admin_list_log(
+        app_id: str | None = Query(None),
+        action: str | None = Query(None),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=500),
+        moderation: ModerationStore = Depends(_get_moderation),
+        _actor: str = Depends(_require_admin),
+    ) -> Page[LogRecord]:
+        entries, total = moderation.list_log(
+            app_id=app_id, action=action, offset=offset, limit=limit
+        )
+        return Page[LogRecord](
+            items=[LogRecord.from_entry(e) for e in entries],
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
+
+    # --- admin UI ----------------------------------------------------------- #
+
+    @app.get(
+        "/admin/ui",
+        tags=["admin"],
+        response_class=HTMLResponse,
+        responses={401: _ERROR_RESPONSES[401]},
+        summary="Admin moderation dashboard (HTML)",
+        description=(
+            "Single-page HTML view of the open reports queue + registered "
+            "apps with their tags. Provides forms for tag mutation, app "
+            "removal, and report resolution. Auth: admin bearer token."
+        ),
+        include_in_schema=False,
+    )
+    def admin_ui(
+        registry: Registry = Depends(_get_registry),
+        moderation: ModerationStore = Depends(_get_moderation),
+        _actor: str = Depends(_require_admin),
+    ) -> HTMLResponse:
+        apps, _ = registry.list(offset=0, limit=200)
+        open_reports, _ = moderation.list_reports(
+            status=ReportStatus.OPEN, offset=0, limit=200
+        )
+        log_entries, _ = moderation.list_log(offset=0, limit=50)
+        html = render_admin_index(
+            apps=apps,
+            open_reports=open_reports,
+            recent_log=log_entries,
+            allowed_tags=sorted(ALLOWED_TAGS),
+        )
+        return HTMLResponse(html)
+
+
+def _close_report_route(
+    moderation: ModerationStore,
+    *,
+    report_id: str,
+    actor: str,
+    note: str | None,
+    action: str,
+) -> ReportRecord:
+    try:
+        if action == "resolve":
+            report = moderation.resolve_report(report_id, actor=actor, note=note)
+        else:
+            report = moderation.dismiss_report(report_id, actor=actor, note=note)
+    except UnknownReportError as exc:
+        raise _report_not_found(exc) from exc
+    except ReportAlreadyClosedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "report_already_closed", "detail": str(exc)},
+        ) from exc
+    moderation.log(
+        action=f"report.{action}",
+        actor=actor,
+        app_id=report.app_id,
+        details={"report_id": report.id, "note": note},
+    )
+    return ReportRecord.from_report(report)
+
+
+def _report_not_found(exc: UnknownReportError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"error": "report_not_found", "detail": str(exc)},
+    )
 
 
 def _consume_challenge(
@@ -478,7 +919,8 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def _http_exception_handler(
         _request: Request, exc: HTTPException
     ) -> JSONResponse:
-        # Normalize structured error payloads to the ErrorResponse shape.
+        # Normalize structured error payloads to the ErrorResponse shape, but
+        # preserve any caller-supplied headers (e.g. WWW-Authenticate).
         detail = exc.detail
         if isinstance(detail, dict):
             payload = ErrorResponse(
@@ -490,7 +932,11 @@ def _register_exception_handlers(app: FastAPI) -> None:
                 error="http_error",
                 detail=str(detail) if detail is not None else None,
             ).model_dump(exclude_none=True)
-        return JSONResponse(status_code=exc.status_code, content=payload)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=payload,
+            headers=dict(exc.headers) if exc.headers else None,
+        )
 
 
 # Re-export for convenience: ``from pageros_marketplace.registry.app import validate_manifest``

@@ -4,9 +4,9 @@ A durable backend (Postgres / SQLite) is intentionally deferred to MKT-011; the
 public surface here is a small ``Registry`` class so swapping the backing
 storage is a contained change.
 
-Trust tagging (``unverified`` / ``verified`` / ``featured`` / ``flagged``,
-SPEC §10.5) lives on the entry but is only flipped manually for now — the DNS
-TXT challenge (MKT-003) and moderation queue (MKT-006) will drive it.
+Trust tagging (SPEC §10.5) lives on the entry. ``unverified`` is implicit (the
+absence of ``verified``); ``verified`` / ``featured`` / ``flagged`` are
+admin-applied tags driven by the moderation tooling in MKT-006.
 """
 
 from __future__ import annotations
@@ -19,6 +19,11 @@ from typing import Iterable, Iterator
 from ..manifest import Manifest
 
 
+#: Admin-applied trust tags (SPEC §10.5). ``unverified`` is the implicit
+#: default when no tag is applied.
+ALLOWED_TAGS: frozenset[str] = frozenset({"verified", "featured", "flagged"})
+
+
 class RegistryError(Exception):
     """Base class for registry-level errors."""
 
@@ -27,6 +32,15 @@ class DuplicateAppError(RegistryError):
     def __init__(self, app_id: str):
         super().__init__(f"app already registered: {app_id}")
         self.app_id = app_id
+
+
+class InvalidTagError(RegistryError):
+    def __init__(self, tag: str):
+        super().__init__(
+            f"invalid trust tag: {tag!r}. Allowed: "
+            f"{', '.join(sorted(ALLOWED_TAGS))}"
+        )
+        self.tag = tag
 
 
 class UnknownAppError(RegistryError):
@@ -103,6 +117,55 @@ class Registry:
         with self._lock:
             if self._entries.pop(app_id, None) is None:
                 raise UnknownAppError(app_id)
+
+    def set_tags(self, app_id: str, tags: Iterable[str]) -> AppEntry:
+        """Replace the full trust-tag set for ``app_id``."""
+        normalized = _normalize_tags(tags)
+        with self._lock:
+            current = self._entries.get(app_id)
+            if current is None:
+                raise UnknownAppError(app_id)
+            entry = replace(
+                current,
+                tags=normalized,
+                updated_at=datetime.now(timezone.utc),
+            )
+            self._entries[app_id] = entry
+            return entry
+
+    def add_tag(self, app_id: str, tag: str) -> AppEntry:
+        """Idempotently add a single trust tag."""
+        if tag not in ALLOWED_TAGS:
+            raise InvalidTagError(tag)
+        with self._lock:
+            current = self._entries.get(app_id)
+            if current is None:
+                raise UnknownAppError(app_id)
+            if tag in current.tags:
+                return current
+            entry = replace(
+                current,
+                tags=tuple(sorted({*current.tags, tag})),
+                updated_at=datetime.now(timezone.utc),
+            )
+            self._entries[app_id] = entry
+            return entry
+
+    def remove_tag(self, app_id: str, tag: str) -> AppEntry:
+        """Idempotently remove a single trust tag."""
+        with self._lock:
+            current = self._entries.get(app_id)
+            if current is None:
+                raise UnknownAppError(app_id)
+            if tag not in current.tags:
+                return current
+            entry = replace(
+                current,
+                tags=tuple(t for t in current.tags if t != tag),
+                updated_at=datetime.now(timezone.utc),
+            )
+            self._entries[app_id] = entry
+            return entry
 
     # ----- reads ----------------------------------------------------------- #
 
@@ -181,3 +244,15 @@ class Registry:
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+
+
+# --- helpers --------------------------------------------------------------- #
+
+
+def _normalize_tags(tags: Iterable[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    for tag in tags:
+        if tag not in ALLOWED_TAGS:
+            raise InvalidTagError(tag)
+        seen.add(tag)
+    return tuple(sorted(seen))
