@@ -39,6 +39,7 @@ func New(opts Options) *Server {
 	mux.Handle("/healthz", newHealthzHandler(opts.Storage, opts.BuildTag))
 	mux.Handle("GET /pull/{device_pubkey}", newPullHandler(opts.Storage, opts.Logger, 0))
 	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Logger, 0, opts.MaxPushBytes))
+	mux.Handle("DELETE /pull/{device_pubkey}/{notification_id}", newAckHandler(opts.Storage, opts.Logger, 0))
 
 	s := &Server{
 		opts:   opts,

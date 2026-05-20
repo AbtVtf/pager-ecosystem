@@ -156,3 +156,19 @@ registry currently stores a single 32-byte pubkey; this implementation
 verifies against whatever the registry returns. Resolving the
 "one key vs two" inconsistency is a marketplace concern tracked
 separately.
+
+## What this task delivers (PUSH-004)
+
+`DELETE /pull/{device_pubkey}/{notification_id}` is wired in
+(`internal/server/ack.go`):
+
+- Same `PagerOS-Sig` device-signing scheme as `GET /pull` — re-uses
+  `pageossig.Verify` and the URL/signed-pubkey cross-check so the two
+  endpoints can never diverge in subtle ways.
+- Idempotent: SPEC PUSH-004 says "Removes acked notification from
+  queue; idempotent." Both "removed" and "did not exist" return
+  `204 No Content`. Clients learn nothing useful from a 404 here and
+  surfacing the distinction makes retry-driven acks noisier without
+  improving correctness.
+- Delegates to `storage.Store.Delete` (already in place from PUSH-005);
+  no new storage surface added.
