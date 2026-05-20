@@ -1,0 +1,20 @@
+# PagerOS Exit Node configuration (EXIT-001 skeleton).
+# Copy to /etc/pager-ecosystem/exit-node.yaml and edit.
+
+node_name: my-exit-node
+
+lora:
+  # Serial port for the USB LoRa transceiver.
+  port: /dev/ttyUSB0
+  baud_rate: 115200
+  # Region: US915 | EU868 | AS923 | AU915
+  region: US915
+
+rate_limit:
+  # Per-device cap (EXIT-004 enforces this; ignored in EXIT-001).
+  per_device_per_min: 60
+
+stats:
+  # Anonymized stats publisher (EXIT-007; ignored in EXIT-001).
+  enabled: false
+  url: https://stats.pageros.org/exit
