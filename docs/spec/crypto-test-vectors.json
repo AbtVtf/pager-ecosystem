@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "generated_at": "2026-05-20",
+  "spec_ref": "docs/spec/crypto-suite.md",
+  "notes": "Shared test vectors for Ed25519, X25519, and ChaCha20-Poly1305 (IETF). Every PagerOS implementation MUST pass every vector. See crypto-suite.md §3 for semantics. All values are lowercase hex.",
+  "vectors": [
+    {
+      "id": "ed25519-rfc8032-test1",
+      "kind": "ed25519",
+      "source": "RFC 8032 §7.1 TEST 1",
+      "seed": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+      "pub": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "msg": "",
+      "sig": "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+    },
+    {
+      "id": "ed25519-rfc8032-test2",
+      "kind": "ed25519",
+      "source": "RFC 8032 §7.1 TEST 2",
+      "seed": "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+      "pub": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "msg": "72",
+      "sig": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"
+    },
+    {
+      "id": "ed25519-rfc8032-test3",
+      "kind": "ed25519",
+      "source": "RFC 8032 §7.1 TEST 3",
+      "seed": "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+      "pub": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+      "msg": "af82",
+      "sig": "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a"
+    },
+    {
+      "id": "ed25519-pageros-sig-sample",
+      "kind": "ed25519",
+      "source": "PagerOS §9.2 PagerOS-Sig sample input",
+      "seed": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+      "pub": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "msg_components": {
+        "method": "POST",
+        "url": "/v1/events",
+        "timestamp": "1700000000",
+        "body_hash_hex": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+      },
+      "msg": "504f53542f76312f6576656e747331373030303030303030 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "msg_assembly": "concat(utf8(method), utf8(url), utf8(timestamp), body_hash_bytes) — no separators, see SPEC.md §9.2 (drop the space in 'msg' before hex-decoding)",
+      "sig": "PAGEROS_SIG_PENDING_FROM_IMPL",
+      "note": "PagerOS-specific vector. Sig is filled in by first reference impl run (PyNaCl + Go cross-check) and committed before v1.0 / SEC-003. Placeholder for v0.2 draft so the schema is stable."
+    },
+    {
+      "id": "x25519-rfc7748-6.1",
+      "kind": "x25519",
+      "source": "RFC 7748 §6.1 Alice/Bob",
+      "priv": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+      "pub_self": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+      "pub_peer": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+      "shared": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+      "derived_key": "PAGEROS_HKDF_PENDING_FROM_IMPL",
+      "kdf": {
+        "fn": "HKDF-SHA256",
+        "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "info_utf8": "pageros/v1/e2e",
+        "L": 32
+      },
+      "note": "derived_key is filled in by the first implementation's CI run and reviewed by SEC before merge; placeholder kept in v0.2 draft so the schema is stable."
+    },
+    {
+      "id": "chacha20poly1305-rfc8439-2.8.2",
+      "kind": "chacha20poly1305",
+      "source": "RFC 8439 §2.8.2 (IETF variant)",
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "nonce": "070000004041424344454647",
+      "aad": "50515253c0c1c2c3c4c5c6c7",
+      "plaintext": "4c616469657320616e642047656e746c656d656e206f662074686520636c617373206f66202739393a204966204920636f756c64206f6666657220796f75206f6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73637265656e20776f756c642062652069742e",
+      "ciphertext": "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691"
+    },
+    {
+      "id": "chacha20poly1305-pageros-nonce-empty",
+      "kind": "chacha20poly1305",
+      "source": "PagerOS §1.2 nonce layout, empty plaintext",
+      "key": "0101010101010101010101010101010101010101010101010101010101010101",
+      "nonce": "010000000000000000000000",
+      "nonce_assembly": "sender_id=0x01 (app→device) || u64_be(0) || 3 zero bytes",
+      "aad": "",
+      "plaintext": "",
+      "ciphertext_note": "Filled in by first reference impl run (PyNaCl) and committed in v1.0 before SEC-003. Placeholder for v0.2 draft."
+    },
+    {
+      "id": "chacha20poly1305-rfc8439-tag-mutated",
+      "kind": "chacha20poly1305-decrypt-fail",
+      "source": "Derived from rfc8439-2.8.2 with last tag byte XOR 0x01",
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "nonce": "070000004041424344454647",
+      "aad": "50515253c0c1c2c3c4c5c6c7",
+      "ciphertext": "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600690",
+      "expect": "auth_fail",
+      "note": "Decrypt MUST fail. Implementations MUST NOT return partial plaintext."
+    }
+  ]
+}
