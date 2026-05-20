@@ -1,4 +1,4 @@
-# PagerOS Exit Node configuration (EXIT-001 skeleton).
+# PagerOS Exit Node configuration.
 # Copy to /etc/pager-ecosystem/exit-node.yaml and edit.
 
 node_name: my-exit-node
@@ -18,3 +18,17 @@ stats:
   # Anonymized stats publisher (EXIT-007; ignored in EXIT-001).
   enabled: false
   url: https://stats.pageros.org/exit
+
+advertise:
+  # Discovery beacon (EXIT-005 / LORA-005). When enabled, the exit-node
+  # broadcasts an `exit-node-advertise` packet every interval_sec seconds
+  # so nearby devices can discover and rank this node.
+  enabled: false
+  # Cadence in seconds. Must be between 10 and 300 (spec §6.2.4).
+  interval_sec: 30
+  # Internet-bandwidth class: unknown | low | medium | high | gigabit.
+  bw_class: high
+  # 32-byte Ed25519 identity public key, hex-encoded (64 chars).
+  # Generate once with e.g.: openssl rand -hex 32  (placeholder; real
+  # keys come from the SEC-001 keystore).
+  identity_pubkey_hex: ""
