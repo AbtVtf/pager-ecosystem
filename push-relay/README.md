@@ -70,5 +70,28 @@ go test ./...
 - `Store` interface in `internal/storage` with a Redis implementation (PING-verified at startup).
 - `docker-compose.yml` provisioning Redis + relay.
 
-The actual `/push`, `/pull`, `/ack`, queue caps, signature verification, and
-rate limiting arrive in PUSH-002..PUSH-007.
+## What this task delivers (PUSH-005)
+
+Per-device queue semantics on top of the `Store` interface
+(`internal/storage`):
+
+| Cap                 | Value             | Source        |
+| ------------------- | ----------------- | ------------- |
+| Entries per device  | 16                | SPEC §6.6.1   |
+| Per-entry lifetime  | 7 days            | SPEC §6.6.1   |
+| Bytes per device    | 1 MiB             | SPEC §6.6.4   |
+
+Eviction rules (applied on every `Enqueue`, and TTL is also applied on `List`):
+
+1. Drop entries older than `QueueTTL`.
+2. If the queue exceeds `MaxQueueLen`, drop the oldest entries until it fits.
+3. If the total stored byte size exceeds `MaxQueueBytes`, drop the oldest
+   entries until it fits.
+
+A new `NewMemory()` backend is provided for tests and dev usage — both
+backends share the same observable semantics. The Redis backend uses a
+sorted set keyed by enqueue timestamp and runs the enqueue+eviction step
+inside a Lua script for atomicity.
+
+The actual `/push`, `/pull`, `/ack` HTTP handlers and the signature
+verification / rate limiting paths arrive in PUSH-002..PUSH-004, PUSH-006.

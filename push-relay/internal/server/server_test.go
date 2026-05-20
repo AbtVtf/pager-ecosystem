@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/pageros/pageros/push-relay/internal/storage"
 )
 
 type fakeStore struct {
@@ -14,6 +16,13 @@ type fakeStore struct {
 
 func (f *fakeStore) Ping(ctx context.Context) error { return f.pingErr }
 func (f *fakeStore) Close() error                   { return nil }
+func (f *fakeStore) Enqueue(ctx context.Context, _ string, n storage.Notification) (storage.Notification, error) {
+	return n, nil
+}
+func (f *fakeStore) List(ctx context.Context, _ string) ([]storage.Notification, error) {
+	return nil, nil
+}
+func (f *fakeStore) Delete(ctx context.Context, _, _ string) (bool, error) { return false, nil }
 
 func TestHealthzOK(t *testing.T) {
 	s := New(Options{Storage: &fakeStore{}, BuildTag: "test"})
