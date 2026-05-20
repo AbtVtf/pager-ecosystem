@@ -1,0 +1,68 @@
+# Local production-like stack for the marketplace registry.
+#
+# Today the API is stateless (in-memory store from MKT-002). The Postgres
+# service is shipped as a reserved slot wired up but *not yet used* — it will
+# back the durable registry store once MKT-003+ lands. Caddy fronts the API
+# with TLS + HTTP/2; for local testing it accepts http://localhost.
+#
+# Bring up:    docker compose up --build
+# Smoke test:  curl -fsS http://localhost/healthz
+# Tear down:   docker compose down --volumes
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pageros/marketplace-api:dev
+    environment:
+      PAGEROS_MKT_HOST: 0.0.0.0
+      PAGEROS_MKT_PORT: "8080"
+      # Wire when MKT-003+ durable backend lands; ignored by the in-memory store.
+      PAGEROS_MKT_DATABASE_URL: postgresql://pageros:pageros@db:5432/marketplace
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=2).status==200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pageros
+      POSTGRES_PASSWORD: pageros
+      POSTGRES_DB: marketplace
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pageros -d marketplace"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  caddy_data:
+  caddy_config:

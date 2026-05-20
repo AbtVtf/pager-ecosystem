@@ -6,6 +6,7 @@ Server-side of the PagerOS marketplace registry (SPEC.md §10).
 |---|---|---|
 | MKT-001 | YAML manifest schema + validator | done |
 | MKT-002 | Registry REST API (CRUD apps, list, search) + OpenAPI doc | done |
+| MKT-011 | Deployment artifacts + ops plan (registry portion) | scaffolded, see `DEPLOYMENT.md` |
 | MKT-003 | DNS TXT challenge service | upcoming |
 | MKT-006 | Moderation queue + trust tagging | upcoming |
 
@@ -100,4 +101,17 @@ manifest schema. Recognized permissions come from SPEC §9.4.
 
 ```bash
 pytest
+```
+
+## Deployment
+
+See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the full deployment runbook,
+including the backup, monitoring, and scaling plans (MKT-011). The shipped
+`Dockerfile` + `docker-compose.yml` bring up the registry behind a Caddy
+reverse proxy and a Postgres instance reserved for the upcoming durable
+store.
+
+```bash
+docker compose up --build -d
+curl -fsS http://localhost/healthz
 ```

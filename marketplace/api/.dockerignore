@@ -1,0 +1,39 @@
+# Python virtualenv + caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+wheelhouse/
+*.egg
+
+# Test/dev scaffolding
+tests/
+docker-compose.yml
+deploy/
+docs/
+
+# Local secrets / env files
+.env
+.env.*
+*.pem
+*.key
+
+# Editor noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# VCS
+.git/
+.gitignore

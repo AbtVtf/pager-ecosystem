@@ -1,0 +1,35 @@
+# Caddyfile — TLS + HTTP/2 reverse proxy in front of the marketplace API.
+#
+# Production: replace the `:80` block with your real hostname (e.g.
+# `market.pageros.org { ... }`) and Caddy will provision Let's Encrypt
+# certificates automatically. The :80 form below is for local docker-compose
+# testing where we don't have a public DNS name.
+
+{
+    admin off
+    auto_https off
+}
+
+:80 {
+    encode zstd gzip
+
+    # Pass real client info to the API so uvicorn can populate request.client.host.
+    reverse_proxy api:8080 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    header {
+        # Standard hardening; tune for your TLS policy in production.
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
