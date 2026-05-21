@@ -20,6 +20,11 @@ publishing to PyPI.
 - PY-013: PyPI publishing — `pyproject.toml` metadata + classifiers,
   `py.typed` marker, GitHub Actions CI (`pysdk-ci.yml`) and release
   (`pysdk-release.yml`) workflows wired to PyPI Trusted Publishing.
+- PY-012: PROTO-005 conformance — `pageros.conformance` HTTP adapter
+  (`POST /conformance/encode|decode`) drives all 86 cross-language
+  test vectors green; `python -m pageros.conformance` boots the
+  adapter, and `tests/test_conformance.py` integration test asserts
+  100% pass from the runner in pytest.
 
 ## [0.0.1] - unreleased
 

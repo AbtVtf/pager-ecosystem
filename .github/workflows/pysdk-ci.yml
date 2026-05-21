@@ -5,11 +5,15 @@ on:
     branches: [main]
     paths:
       - "sdk/python/**"
+      - "protocol/conformance/**"
+      - "protocol/test-vectors/ui/**"
       - ".github/workflows/pysdk-ci.yml"
       - ".github/workflows/pysdk-release.yml"
   pull_request:
     paths:
       - "sdk/python/**"
+      - "protocol/conformance/**"
+      - "protocol/test-vectors/ui/**"
       - ".github/workflows/pysdk-ci.yml"
       - ".github/workflows/pysdk-release.yml"
 
@@ -38,7 +42,43 @@ jobs:
       - name: Install package + dev extras
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
       - name: Run pytest
+        # Covers PY-012 — `tests/test_conformance.py` boots the
+        # conformance adapter and drives the PROTO-005 runner against
+        # it as a subprocess, asserting 100% pass + exit 0.
         run: python -m pytest
+
+  conformance:
+    # Dedicated job so a conformance regression shows up as its own
+    # red check instead of being buried in the pytest matrix output.
+    # Same runner as the in-process pytest case — just isolated.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+      - name: Install package
+        working-directory: sdk/python
+        run: python -m pip install --upgrade pip && python -m pip install -e .
+      - name: Verify vector on-disk state
+        run: python3 protocol/test-vectors/ui/generate.py --verify
+      - name: Boot conformance adapter + run PROTO-005 runner
+        run: |
+          python3 -m pageros.conformance --host 127.0.0.1 --port 8080 &
+          ADAPTER_PID=$!
+          trap "kill $ADAPTER_PID 2>/dev/null || true" EXIT
+          # Wait for the adapter to bind (max ~5 s).
+          for i in $(seq 1 50); do
+            if curl -s -o /dev/null http://127.0.0.1:8080/conformance/encode -X POST -H 'Content-Type: application/json' -d '{}'; then
+              break
+            fi
+            sleep 0.1
+          done
+          python3 protocol/conformance/proto_conformance.py \
+            --endpoint http://127.0.0.1:8080 \
+            --vectors protocol/test-vectors/ui
 
   build-check:
     # Validates that sdist + wheel build cleanly and pass `twine check`

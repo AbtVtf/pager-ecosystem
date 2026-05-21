@@ -7,6 +7,11 @@ from pageros.codec import (
     decode_frame,
     encode_frame,
 )
+from pageros.conformance import (
+    ConformanceError,
+    conformance_decode,
+    conformance_encode,
+)
 from pageros.ctx import (
     HEADER_GRANTED,
     HEADER_GROUPS,
@@ -120,6 +125,7 @@ __all__ = [
     "Chat",
     "ChatCompose",
     "ChatMessage",
+    "ConformanceError",
     "Ctx",
     "DEFAULT_MAX_SKEW_SECONDS",
     "DEFAULT_PUSH_RELAY_URL",
@@ -191,6 +197,8 @@ __all__ = [
     "build_signing_input",
     "check_frame_size",
     "compute_body_hash",
+    "conformance_decode",
+    "conformance_encode",
     "decode_frame",
     "decode_push_body",
     "decrypt",

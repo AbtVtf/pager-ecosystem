@@ -36,6 +36,24 @@ check_frame_size(encoded_frame, lora_compatible=app.lora_compatible)
 `encoded_frame` may be the CBOR bytes (any bytes-like) or its length as an
 `int`. Pass `frame_label="GET /home"` to include the route in the warning.
 
+## PROTO-005 conformance (PY-012)
+
+The SDK ships a CI-only HTTP adapter that implements the conformance
+contract from `protocol/conformance/README.md`. Boot it from a checkout
+and point the PROTO-005 runner at it:
+
+```
+python -m pageros.conformance --host 127.0.0.1 --port 8080
+# in another shell:
+python3 protocol/conformance/proto_conformance.py \
+    --endpoint http://127.0.0.1:8080 \
+    --vectors protocol/test-vectors/ui
+```
+
+The Python SDK currently reports **86 / 86** vectors passing. The same
+loop runs in CI (`pysdk-ci.yml` → `conformance` job) and inside the
+in-process pytest case `tests/test_conformance.py`.
+
 ## Releasing to PyPI (PY-013)
 
 Releases are published on a tag push that follows the convention
