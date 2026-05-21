@@ -1,0 +1,8 @@
+# Build inputs the consumer doesn't need (we publish `dist/` only,
+# but be defensive in case `files:` in package.json is loosened).
+test/
+dist-test/
+tsconfig*.json
+.gitignore
+*.tgz
+node_modules/

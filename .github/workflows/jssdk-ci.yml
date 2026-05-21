@@ -1,0 +1,48 @@
+name: jssdk ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sdk/js/**"
+      - "protocol/test-vectors/ui/**"
+      - ".github/workflows/jssdk-ci.yml"
+      - ".github/workflows/jssdk-release.yml"
+  pull_request:
+    paths:
+      - "sdk/js/**"
+      - "protocol/test-vectors/ui/**"
+      - ".github/workflows/jssdk-ci.yml"
+      - ".github/workflows/jssdk-release.yml"
+
+defaults:
+  run:
+    working-directory: sdk/js
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # SDK targets Node ≥20 (built-in fetch + node:test). Pin the
+        # supported window in package.json's `engines` and we'll catch
+        # drift before users hit it on npm.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: sdk/js/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (typecheck)
+        run: npm run build
+
+      - name: Tests (incl. PROTO-003 vector conformance, JS-012)
+        run: npm test
