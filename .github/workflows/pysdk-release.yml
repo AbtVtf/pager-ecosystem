@@ -1,0 +1,113 @@
+name: pysdk release
+
+on:
+  push:
+    tags:
+      # Mirrors the cli/v* tag convention used elsewhere in the repo.
+      # Tag MUST be `pysdk/vX.Y.Z` and X.Y.Z MUST match
+      # pageros.__version__ — the workflow asserts this and fails fast
+      # if they drift.
+      - "pysdk/v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build sdist+wheel without publishing"
+        type: boolean
+        default: true
+
+defaults:
+  run:
+    working-directory: sdk/python
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Derive tag version
+        id: version
+        if: github.event_name == 'push'
+        # `pysdk/v1.2.3` -> `1.2.3`
+        run: |
+          ref="${GITHUB_REF#refs/tags/pysdk/v}"
+          echo "version=$ref" >> "$GITHUB_OUTPUT"
+          echo "Tag version: $ref"
+        shell: bash
+
+      - name: Assert __version__ matches tag
+        if: github.event_name == 'push'
+        run: |
+          pkg_version=$(python -c "import pageros, sys; sys.path.insert(0, '.'); print(pageros.__version__)")
+          tag_version="${{ steps.version.outputs.version }}"
+          if [ "$pkg_version" != "$tag_version" ]; then
+            echo "::error::pageros.__version__ ($pkg_version) does not match tag pysdk/v$tag_version" >&2
+            exit 1
+          fi
+        shell: bash
+
+      - name: Run tests
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest
+
+      - name: Build sdist + wheel
+        run: python -m build --sdist --wheel --outdir dist
+
+      - name: twine check
+        run: python -m twine check dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pysdk-dist
+          path: sdk/python/dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # PyPI Trusted Publishing (OIDC) — no API token. The repo + workflow
+    # + environment combination below must be registered as a Trusted
+    # Publisher on https://pypi.org/manage/account/publishing/ for the
+    # `pageros` project before the first release lands.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pageros
+    permissions:
+      id-token: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: pysdk-dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # Defaults to https://upload.pypi.org/legacy/ — no need to set.
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: pysdk v${{ needs.build.outputs.version }}
+          body: |
+            Python SDK release — `pip install pageros==${{ needs.build.outputs.version }}`.
+
+            See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/sdk/python/CHANGELOG.md) for the per-release notes.
+          files: dist/*
+          fail_on_unmatched_files: true

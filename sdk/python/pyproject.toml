@@ -1,22 +1,71 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pageros"
-version = "0.0.1"
-description = "Python SDK for PagerOS"
+description = "Python SDK for building PagerOS apps — server-authoritative widget DSL over CBOR, with Push Relay + LoRa transport helpers."
 requires-python = ">=3.10"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "PagerOS Team" }]
+keywords = ["pageros", "pager", "iot", "esp32", "lora", "cbor", "sdk"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
 dependencies = [
     "pynacl>=1.5",
     "pyyaml>=6.0",
 ]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "pytest>=8.0",
+    "twine>=5.0",
+]
+
+[project.urls]
+Homepage = "https://pageros.org"
+Documentation = "https://pageros.org/docs"
+Repository = "https://github.com/pageros/pager-ecosystem"
+Issues = "https://github.com/pageros/pager-ecosystem/issues"
+Changelog = "https://github.com/pageros/pager-ecosystem/blob/main/sdk/python/CHANGELOG.md"
+
+[project.scripts]
+pageros-dev = "pageros.devserver:main"
+
+# Version is the single source of truth in pageros/__init__.py:__version__.
+# setuptools reads it via the attr-getter so a release bump only touches
+# one file (matches the release-workflow guard that asserts
+# `pageros.__version__ == ${{ ref tag suffix }}`).
+[tool.setuptools.dynamic]
+version = { attr = "pageros.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["pageros*"]
 
-[project.scripts]
-pageros-dev = "pageros.devserver:main"
+# Ship the py.typed marker so downstream consumers pick up SDK type hints
+# without an explicit override. Type-checkers (mypy, pyright) treat any
+# package that has a top-level py.typed sentinel as fully typed
+# (PEP 561 §Inline-type-information).
+[tool.setuptools.package-data]
+pageros = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
