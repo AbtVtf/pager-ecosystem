@@ -258,6 +258,7 @@ class Registry:
         offset: int = 0,
         limit: int = 50,
         category: str | None = None,
+        tag: str | None = None,
         featured_first: bool = False,
     ) -> tuple[list[AppEntry], int]:
         """Return ``(page, total)`` with deterministic ordering.
@@ -268,12 +269,25 @@ class Registry:
         rest of the catalog in ``id`` ASC. The Shell's in-device "Apps"
         home (MKT-005) uses ``featured_first=True`` to surface curated
         picks at the top (MKT-010).
+
+        ``tag`` filters to entries that carry that trust tag (MKT-009).
+        Pass ``"verified"`` for the Shell's verified-only view; the
+        sentinel ``"unverified"`` matches entries with no admin tags
+        applied (the implicit default per SPEC §10.5).
         """
         with self._lock:
             entries: Iterable[AppEntry] = self._entries.values()
             if category is not None:
                 cat = category.lower()
                 entries = (e for e in entries if cat in e.manifest.categories)
+            if tag is not None:
+                tag_norm = tag.lower()
+                if tag_norm == "unverified":
+                    entries = (e for e in entries if not e.tags)
+                elif tag_norm in ALLOWED_TAGS:
+                    entries = (e for e in entries if tag_norm in e.tags)
+                else:
+                    raise InvalidTagError(tag)
             if featured_first:
                 ordered = sorted(entries, key=_featured_first_key)
             else:

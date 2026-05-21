@@ -345,6 +345,15 @@ def _register_routes(app: FastAPI) -> None:
             min_length=1,
             description="Filter to apps that include this category slug.",
         ),
+        tag: str | None = Query(
+            None,
+            min_length=1,
+            description=(
+                "Filter to apps carrying this trust tag (MKT-009). One of "
+                "`verified` / `featured` / `flagged` / `unverified`. The "
+                "Shell uses `tag=verified` for its safe-by-default view."
+            ),
+        ),
         featured_first: bool = Query(
             False,
             description=(
@@ -355,12 +364,16 @@ def _register_routes(app: FastAPI) -> None:
             ),
         ),
     ) -> Page[AppRecord]:
-        entries, total = registry.list(
-            offset=offset,
-            limit=limit,
-            category=category,
-            featured_first=featured_first,
-        )
+        try:
+            entries, total = registry.list(
+                offset=offset,
+                limit=limit,
+                category=category,
+                tag=tag,
+                featured_first=featured_first,
+            )
+        except InvalidTagError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
         return Page[AppRecord](
             items=[AppRecord.from_entry(e) for e in entries],
             total=total,
