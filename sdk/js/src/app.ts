@@ -55,6 +55,27 @@ export interface Request {
   ctx: Ctx;
 }
 
+/**
+ * Headers that carry per-request context fields. Mirrors the Python
+ * SDK's `pageros.ctx` (JS-008) for cross-language consistency.
+ */
+export const HEADER_TRANSPORT = "PagerOS-Transport";
+export const HEADER_GRANTED = "PagerOS-Granted";
+export const HEADER_LOCATION = "PagerOS-Location";
+export const HEADER_GROUPS = "PagerOS-Groups";
+
+/** Transport string values (SPEC §8.3). */
+export const TRANSPORT_WIFI = "wifi";
+export const TRANSPORT_LORA = "lora";
+export type Transport = "wifi" | "lora";
+
+/** A device GPS fix. */
+export interface Location {
+  lat: number;
+  lon: number;
+  ts: number;
+}
+
 export interface Ctx {
   deviceId: Uint8Array | null;
   session: Record<string, unknown> | null;
@@ -65,6 +86,14 @@ export interface Ctx {
    * `PagerOS-Encrypted: 1`. `null` otherwise.
    */
   senderId: Uint8Array | null;
+  /** Transport the request rode in on (SPEC §8.3, JS-008). */
+  transport: Transport;
+  /** Permissions the user has granted to this app (`PagerOS-Granted`). */
+  granted: string[];
+  /** Latest device GPS fix when subscribed to `location` events. */
+  location: Location | null;
+  /** Groups the device is currently subscribed to (`PagerOS-Groups`). */
+  groups: string[];
 }
 
 export class Response {
@@ -304,6 +333,10 @@ export class App {
       session: opts.session ?? null,
       timestamp: signedTimestamp ?? parseTimestampHeader(headerMap),
       senderId,
+      transport: parseTransportHeader(headerMap),
+      granted: parseCsvHeader(headerMap, HEADER_GRANTED),
+      location: parseLocationHeader(headerMap),
+      groups: parseCsvHeader(headerMap, HEADER_GROUPS),
     };
 
     const request: Request = {
@@ -569,6 +602,44 @@ function parseTimestampHeader(headers: Record<string, string>): number | null {
   if (raw === undefined) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
+}
+
+// JS-008: ctx header parsers — case-insensitive (the dispatcher already
+// lowercases keys before calling these). Malformed values fall back to
+// safe defaults so a stale device header never crashes a handler.
+
+function parseTransportHeader(headers: Record<string, string>): Transport {
+  const raw = headers[HEADER_TRANSPORT.toLowerCase()];
+  if (raw === undefined) return "wifi";
+  const t = raw.trim().toLowerCase();
+  return t === "lora" ? "lora" : "wifi";
+}
+
+function parseCsvHeader(headers: Record<string, string>, name: string): string[] {
+  const raw = headers[name.toLowerCase()];
+  if (raw === undefined) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function parseLocationHeader(headers: Record<string, string>): Location | null {
+  const raw = headers[HEADER_LOCATION.toLowerCase()];
+  if (raw === undefined) return null;
+  const parts = raw.split(",").map((s) => s.trim());
+  if (parts.length !== 3) return null;
+  const lat = Number(parts[0]);
+  const lon = Number(parts[1]);
+  const ts = Number(parts[2]);
+  if (
+    !Number.isFinite(lat) || !Number.isFinite(lon) ||
+    !Number.isInteger(ts) || ts < 0 ||
+    lat < -90 || lat > 90 || lon < -180 || lon > 180
+  ) {
+    return null;
+  }
+  return { lat, lon, ts };
 }
 
 function resolveAddress(opts: RunOptions): { host: string; port: number } {
