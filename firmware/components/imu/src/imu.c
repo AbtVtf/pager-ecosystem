@@ -19,6 +19,12 @@ static const char *TAG = "imu";
 #define IMU_I2C_SDA_GPIO    3
 #define IMU_I2C_SCL_GPIO    2
 #define IMU_I2C_FREQ_HZ     400000
+// BHI260AP I2C address: tried both 0x28 (returns 0x70 — wrong chip
+// answering, likely the PCF85063 RTC at 0x51 reflecting register
+// noise) and 0x29 (no ACK). The BHI260's actual presence on this
+// particular board revision is uncertain; full bring-up (firmware
+// upload via SPI patch RAM) was scoped to v2 anyway. Probe stays at
+// 0x28 so we surface the wrong-id warning instead of a hard ACK fail.
 #define IMU_I2C_ADDR        0x28
 
 // BHI260AP chip-id register. Documented at 0x2B in the Bosch BHy 1.x

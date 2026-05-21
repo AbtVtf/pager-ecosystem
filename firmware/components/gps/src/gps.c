@@ -159,16 +159,22 @@ static esp_err_t init_i2c_once(void)
         .scl_pullup_en    = GPIO_PULLUP_ENABLE,
         .master.clk_speed = GPS_I2C_FREQ_HZ,
     };
-    esp_err_t err = i2c_param_config(GPS_I2C_PORT, &cfg);
-    if (err != ESP_OK) return err;
-    err = i2c_driver_install(GPS_I2C_PORT, cfg.mode, 0, 0, 0);
-    if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
-        // INVALID_STATE means another component already installed the
-        // driver on this port — fine, the bus is shared.
-        i2c_up = true;
-        return ESP_OK;
+    // Try install first. ESP_OK = we installed; ESP_ERR_INVALID_STATE
+    // and ESP_FAIL both mean the driver is already up via another
+    // component (i2c_bus has installed it for us in IDF v5.3, which
+    // returns ESP_FAIL on legacy re-install attempts rather than the
+    // older ESP_ERR_INVALID_STATE). Accept either; the GPS driver
+    // really uses I2C only to bring the XL9555 enable line up, which
+    // main.c already did before us.
+    esp_err_t err = i2c_driver_install(GPS_I2C_PORT, cfg.mode, 0, 0, 0);
+    if (err == ESP_OK) {
+        err = i2c_param_config(GPS_I2C_PORT, &cfg);
+        if (err != ESP_OK) return err;
+    } else if (err != ESP_ERR_INVALID_STATE && err != ESP_FAIL) {
+        return err;
     }
-    return err;
+    i2c_up = true;
+    return ESP_OK;
 }
 
 static esp_err_t init_uart(void)

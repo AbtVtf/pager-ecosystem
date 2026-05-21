@@ -14,12 +14,15 @@
 
 static const char *TAG = "nfc";
 
-// LILYGO T-LoRa Pager NFC wiring (per arduino-esp32 variant):
-//   - Shared SPI2_HOST with display + LoRa.
-//   - NFC_CS  GPIO 7
-//   - NFC_IRQ GPIO 18 (active high on IRQ)
-#define NFC_CS_GPIO    7
-#define NFC_IRQ_GPIO   18
+// LILYGO T-LoRa Pager NFC wiring — verified against the authoritative
+// arduino-esp32 variant header (NFC_CS=39, NFC_INT=5). The earlier
+// draft used CS=7 (= rotary push button, ROTARY_C) and IRQ=18 (= I2S
+// WS), both wrong; they fought the input + audio drivers for those
+// GPIOs and the chip never selected. NFC also needs XL9555 NFC_EN
+// asserted before the chip will respond — main.c flips that during
+// XL9555 init.
+#define NFC_CS_GPIO    39
+#define NFC_IRQ_GPIO   5
 #define NFC_SPI_HOST   SPI2_HOST
 #define NFC_SPI_CLOCK  6000000   // 6 MHz — datasheet allows up to 10 MHz
 

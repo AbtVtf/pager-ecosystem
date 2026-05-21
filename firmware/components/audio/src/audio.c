@@ -19,25 +19,26 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "driver/i2c.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "pageros_i2c_bus.h"
 
 static const char *TAG = "audio";
 
-// LilyGO T-LoRa Pager pinout (per Arduino-ESP32 lilygo_tlora_pager
-// variant). Adjust if a future revision moves these.
+// LilyGO T-LoRa Pager — verified against arduino-esp32 variant header.
+// The ES8311 codec sits on the shared I2C bus (SDA=3, SCL=2) at 0x18.
+// I2S pins per the variant: WS=18, SCK=11, MCLK=10, SDOUT=45, SDIN=17.
+// The amp is gated by XL9555 EXPANDS_AMP_EN — main.c asserts that bit
+// during XL9555 init so the speaker can sound.
 #define ES8311_I2C_ADDR        0x18
-#define ES8311_I2C_PORT        I2C_NUM_0
-#define I2C_SDA_GPIO           39
-#define I2C_SCL_GPIO           40
-
 #define I2S_PORT               I2S_NUM_0
-#define I2S_BCLK_GPIO          1
-#define I2S_LRCK_GPIO          2
-#define I2S_DATA_GPIO          15
+#define I2S_MCLK_GPIO          10
+#define I2S_BCLK_GPIO          11
+#define I2S_LRCK_GPIO          18
+#define I2S_DOUT_GPIO          45
+#define I2S_DIN_GPIO           17
 
 #define TONE_DURATION_MS       250
 #define TONE_SAMPLES_PER_MS    (PAGEROS_AUDIO_SAMPLE_RATE / 1000)
@@ -55,9 +56,7 @@ static struct {
 
 static esp_err_t es8311_w(uint8_t reg, uint8_t val)
 {
-    uint8_t buf[2] = { reg, val };
-    return i2c_master_write_to_device(ES8311_I2C_PORT, ES8311_I2C_ADDR,
-                                      buf, 2, pdMS_TO_TICKS(100));
+    return pageros_i2c_reg_write8(ES8311_I2C_ADDR, reg, val);
 }
 
 static esp_err_t es8311_init(void)
@@ -144,19 +143,13 @@ esp_err_t pageros_audio_init(void)
 {
     if (g.inited) return ESP_OK;
 
-    // I2C for codec control.
-    i2c_config_t cfg = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = I2C_SDA_GPIO,
-        .scl_io_num = I2C_SCL_GPIO,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = 400000,
-    };
-    esp_err_t r = i2c_param_config(ES8311_I2C_PORT, &cfg);
-    if (r != ESP_OK) return r;
-    r = i2c_driver_install(ES8311_I2C_PORT, cfg.mode, 0, 0, 0);
-    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) return r;
+    // The codec sits on the shared I2C bus (init owned by i2c_bus).
+    // Calling the shared init is idempotent and safe regardless of who
+    // got there first.
+    esp_err_t r = pageros_i2c_bus_init();
+    if (r != ESP_OK && r != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "shared I2C bus init: %s", esp_err_to_name(r));
+    }
 
     // ES8311 register init — non-fatal so we still expose the I2S TX
     // path even if the codec isn't there (e.g. on dev boards without
@@ -165,7 +158,7 @@ esp_err_t pageros_audio_init(void)
         ESP_LOGW(TAG, "ES8311 init failed — playback path may be silent");
     }
 
-    // I2S TX channel.
+    // I2S TX channel — pins per LILYGO authoritative variant.
     i2s_chan_config_t ch_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
     r = i2s_new_channel(&ch_cfg, &g.tx_chan, NULL);
     if (r != ESP_OK) return r;
@@ -174,11 +167,11 @@ esp_err_t pageros_audio_init(void)
         .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(PAGEROS_AUDIO_SAMPLE_RATE),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
+            .mclk = I2S_MCLK_GPIO,
             .bclk = I2S_BCLK_GPIO,
             .ws   = I2S_LRCK_GPIO,
-            .dout = I2S_DATA_GPIO,
-            .din  = I2S_GPIO_UNUSED,
+            .dout = I2S_DOUT_GPIO,
+            .din  = I2S_DIN_GPIO,
             .invert_flags = { 0 },
         },
     };

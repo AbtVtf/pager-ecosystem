@@ -19,6 +19,9 @@ idf_component_register(
         widgets
         fonts
         cbor_codec
+        i2c_bus
+        xl9555
+        power
         nvs_flash
         app_update
         esp_hw_support

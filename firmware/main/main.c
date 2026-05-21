@@ -23,6 +23,7 @@
 #include "pageros_display.h"
 #include "pageros_fonts.h"
 #include "pageros_gps.h"
+#include "pageros_i2c_bus.h"
 #include "pageros_identity.h"
 #include "pageros_imu.h"
 #include "pageros_input.h"
@@ -31,14 +32,16 @@
 #include "pageros_logger.h"
 #include "pageros_lora.h"
 #include "pageros_network.h"
+#include "pageros_power.h"
 #include "pageros_shell.h"
 #include "pageros_storage.h"
 #include "pageros_widgets.h"
+#include "pageros_xl9555.h"
 #include "selftest.h"
 
 static const char *TAG = "pageros";
 
-static const char *router_nav_name(pageros_router_nav_t n)
+__attribute__((unused)) static const char *router_nav_name(pageros_router_nav_t n)
 {
     switch (n) {
         case PAGEROS_ROUTER_NAV_ENTER:     return "ENTER";
@@ -48,29 +51,187 @@ static const char *router_nav_name(pageros_router_nav_t n)
     }
 }
 
-// Default shell handler: accept and log everything the focused widget
-// declines. Until the real Shell (PagerOS UI DSL renderer) lands this
-// stands in as the "app shell" referenced by the FW-024 acceptance — it
-// proves the bubble-up path end-to-end on the device.
+// --- Shell navigation state --------------------------------------- //
+//
+// Single foreground app at a time (SPEC §7.3); focus_widget_index +
+// focus_item_index together name what the user has highlighted in the
+// current Frame. The input router's shell handler mutates these on
+// encoder/nav events and then triggers a re-render.
+
+static pageros_widgets_focus_t s_focus = { .widget_index = 0, .item_index = 0, .scroll = 0 };
+
+// Walk the foreground Frame's body looking up the widget at
+// `widget_index`; returns the focused item's `href` text (NUL-terminated)
+// or NULL if not addressable.
+static const char *focused_href(const pgr_cbor_value_t *frame,
+                                int widget_index, int item_index,
+                                char *out, size_t out_cap)
+{
+    if (!frame || frame->kind != PGR_CBOR_KIND_MAP || !out) return NULL;
+    // Pull body from the Frame.
+    const pgr_cbor_value_t *body = NULL;
+    for (size_t i = 0; i < frame->v.map.len; i++) {
+        const pgr_cbor_pair_t *p = &frame->v.map.items[i];
+        if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+            p->key.v.bytes.len == 4 &&
+            memcmp(p->key.v.bytes.data, "body", 4) == 0) { body = &p->val; break; }
+    }
+    if (!body || body->kind != PGR_CBOR_KIND_ARRAY) return NULL;
+    if (widget_index < 0 || widget_index >= (int)body->v.arr.len) return NULL;
+    const pgr_cbor_value_t *w = &body->v.arr.items[widget_index];
+    if (w->kind != PGR_CBOR_KIND_MAP) return NULL;
+    // Find the "items" array.
+    const pgr_cbor_value_t *items = NULL;
+    for (size_t i = 0; i < w->v.map.len; i++) {
+        const pgr_cbor_pair_t *p = &w->v.map.items[i];
+        if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+            p->key.v.bytes.len == 5 &&
+            memcmp(p->key.v.bytes.data, "items", 5) == 0) { items = &p->val; break; }
+    }
+    if (!items || items->kind != PGR_CBOR_KIND_ARRAY) return NULL;
+    if (item_index < 0 || item_index >= (int)items->v.arr.len) return NULL;
+    const pgr_cbor_value_t *it = &items->v.arr.items[item_index];
+    if (it->kind != PGR_CBOR_KIND_MAP) return NULL;
+    for (size_t i = 0; i < it->v.map.len; i++) {
+        const pgr_cbor_pair_t *p = &it->v.map.items[i];
+        if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+            p->key.v.bytes.len == 4 &&
+            memcmp(p->key.v.bytes.data, "href", 4) == 0 &&
+            p->val.kind == PGR_CBOR_KIND_TEXT) {
+            size_t l = p->val.v.bytes.len;
+            if (l >= out_cap) l = out_cap - 1;
+            memcpy(out, p->val.v.bytes.data, l);
+            out[l] = '\0';
+            return out;
+        }
+    }
+    return NULL;
+}
+
+// How many list rows is the focused widget? Used to bound encoder
+// navigation. Returns -1 if the widget isn't a list.
+static int focused_list_len(const pgr_cbor_value_t *frame, int widget_index)
+{
+    if (!frame || frame->kind != PGR_CBOR_KIND_MAP) return -1;
+    const pgr_cbor_value_t *body = NULL;
+    for (size_t i = 0; i < frame->v.map.len; i++) {
+        const pgr_cbor_pair_t *p = &frame->v.map.items[i];
+        if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+            p->key.v.bytes.len == 4 &&
+            memcmp(p->key.v.bytes.data, "body", 4) == 0) { body = &p->val; break; }
+    }
+    if (!body || body->kind != PGR_CBOR_KIND_ARRAY) return -1;
+    if (widget_index < 0 || widget_index >= (int)body->v.arr.len) return -1;
+    const pgr_cbor_value_t *w = &body->v.arr.items[widget_index];
+    if (w->kind != PGR_CBOR_KIND_MAP) return -1;
+    for (size_t i = 0; i < w->v.map.len; i++) {
+        const pgr_cbor_pair_t *p = &w->v.map.items[i];
+        if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+            p->key.v.bytes.len == 5 &&
+            memcmp(p->key.v.bytes.data, "items", 5) == 0 &&
+            p->val.kind == PGR_CBOR_KIND_ARRAY) {
+            return (int)p->val.v.arr.len;
+        }
+    }
+    return -1;
+}
+
+// Re-render the foreground app's current Frame with the up-to-date focus.
+static void render_foreground(void)
+{
+    pageros_widgets_palette_t pal;
+    pageros_widgets_default_palette(&pal);
+    pageros_widgets_ctx_t ctx = {
+        .canvas  = {
+            .pixels = (uint16_t *)pageros_display_framebuffer(),
+            .w      = PAGEROS_DISPLAY_WIDTH,
+            .h      = PAGEROS_DISPLAY_HEIGHT,
+        },
+        .palette = pal,
+        .focus   = s_focus,
+        .title   = "PagerOS",
+        .help    = "MENU = up/down  ENTER = open  BACK = back",
+    };
+    const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
+    if (!fr) return;
+    const pgr_cbor_value_t *body = NULL;
+    if (fr->kind == PGR_CBOR_KIND_MAP) {
+        for (size_t i = 0; i < fr->v.map.len; i++) {
+            const pgr_cbor_pair_t *p = &fr->v.map.items[i];
+            if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+                p->key.v.bytes.len == 4 &&
+                memcmp(p->key.v.bytes.data, "body", 4) == 0) { body = &p->val; break; }
+        }
+    }
+    if (pageros_widgets_render_screen(&ctx, body) == ESP_OK) {
+        pageros_display_present();
+    }
+}
+
+// Shell input handler — owns navigation between widgets and items in
+// the foreground Frame. Encoder = scroll within the focused widget;
+// ENTER = activate; BACK = apprt_back.
 static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
 {
     (void)ctx;
+    // Any user input bumps the device back to ACTIVE (full backlight,
+    // fresh inactivity timer). Cheap call — safe to do on every event.
+    pageros_power_kick();
+    const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
+    bool dirty = false;
+
     switch (ev->kind) {
-        case PAGEROS_ROUTER_EVT_ENCODER:
-            ESP_LOGI("shell", "encoder %s",
-                     ev->as.enc == PAGEROS_ROUTER_ENC_CW ? "CW" : "CCW");
-            return true;
+        case PAGEROS_ROUTER_EVT_ENCODER: {
+            // For the v0 Home Frame the second widget is the app list
+            // (index 1 — index 0 is the heading). Keep focus pinned
+            // there and move the item cursor.
+            s_focus.widget_index = 1;
+            int n = focused_list_len(fr, 1);
+            if (n <= 0) break;
+            int step = (ev->as.enc == PAGEROS_ROUTER_ENC_CW) ? +1 : -1;
+            s_focus.item_index = (s_focus.item_index + step + n) % n;
+            dirty = true;
+            break;
+        }
         case PAGEROS_ROUTER_EVT_NAV:
-            ESP_LOGI("shell", "nav %s", router_nav_name(ev->as.nav));
-            return true;
+            if (ev->as.nav == PAGEROS_ROUTER_NAV_ENTER) {
+                char buf[96];
+                const char *href = focused_href(fr, s_focus.widget_index,
+                                                s_focus.item_index, buf, sizeof(buf));
+                if (href) {
+                    ESP_LOGI("shell", "ENTER → href=%s", href);
+                    // For shell-internal hrefs ("open:<app>") we'd
+                    // launch the named app once apps are installed;
+                    // for now log + stay on home.
+                } else {
+                    ESP_LOGI("shell", "ENTER (no href)");
+                }
+                dirty = true;
+            } else if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK ||
+                       ev->as.nav == PAGEROS_ROUTER_NAV_BACK_LONG) {
+                const char *prev = pageros_apprt_back();
+                ESP_LOGI("shell", "BACK → %s", prev ? prev : "(idle)");
+                // Always remount Shell home so something stays on
+                // screen even at the back of the recents stack.
+                pageros_shell_mount_home();
+                s_focus.widget_index = 1;
+                s_focus.item_index = 0;
+                dirty = true;
+            }
+            break;
         case PAGEROS_ROUTER_EVT_KEY:
-            ESP_LOGI("shell", "key row=%u col=%u %s",
+            // Map specific keys later (search, type-ahead). For now
+            // just log so we can confirm the matrix is alive.
+            ESP_LOGD("shell", "key row=%u col=%u %s",
                      ev->as.key.row, ev->as.key.col,
                      ev->as.key.pressed ? "DOWN" : "UP");
             return true;
         default:
             return false;
     }
+
+    if (dirty) render_foreground();
+    return true;
 }
 
 static void on_gps_fix(const pageros_gps_fix_t *fix, void *user_ctx)
@@ -128,6 +289,43 @@ void app_main(void)
     if (id_err != ESP_OK) {
         ESP_LOGE(TAG, "identity init failed: %s — continuing without "
                       "stable identity", esp_err_to_name(id_err));
+    }
+
+    // Shared I2C bus + XL9555 port expander come up FIRST after NVS.
+    // The XL9555 gates power to most peripherals on this board (LoRa,
+    // GPS, NFC, SD, speaker amp) — without flipping its enable bits
+    // the SPI/UART probes for those chips return chip-not-present.
+    // See pageros_xl9555.h for the bit assignments.
+    esp_err_t i2c_err = pageros_i2c_bus_init();
+    if (i2c_err != ESP_OK) {
+        ESP_LOGW(TAG, "shared I2C bus init failed: %s", esp_err_to_name(i2c_err));
+    }
+    esp_err_t xl_err = pageros_xl9555_init();
+    if (xl_err == ESP_OK) {
+        // Power on every gated peripheral, release the keyboard + GPS
+        // chip resets, and arm the SD pull-ups so the card slot drives
+        // valid lines. KB_EN and KB_RST are BOTH required for the
+        // TCA8418 — KB_EN gates VCC, KB_RST is the active-low chip
+        // reset; without VCC, releasing reset is a no-op and the chip
+        // never ACKs on I2C.
+        pageros_xl9555_set(PAGEROS_XL_LORA_EN,   true);
+        pageros_xl9555_set(PAGEROS_XL_GPS_EN,    true);
+        pageros_xl9555_set(PAGEROS_XL_GPS_RST,   true);   // active LOW, drive HIGH = run
+        pageros_xl9555_set(PAGEROS_XL_NFC_EN,    true);
+        pageros_xl9555_set(PAGEROS_XL_SD_EN,     true);
+        pageros_xl9555_set(PAGEROS_XL_SD_PULLEN, true);
+        pageros_xl9555_set(PAGEROS_XL_KB_RST,    true);   // active LOW, drive HIGH = run
+        pageros_xl9555_set(PAGEROS_XL_KB_EN,     true);   // TCA8418 VCC enable
+        pageros_xl9555_set(PAGEROS_XL_AMP_EN,    true);
+        pageros_xl9555_set(PAGEROS_XL_DRV_EN,    true);   // DRV2605 haptic VCC
+        pageros_xl9555_set(PAGEROS_XL_GPIO_EN,   true);   // generic peripheral gate
+        // Give the powered chips ≥ TCA8418's 20 ms POR + a margin
+        // before any I2C probe goes out.
+        vTaskDelay(pdMS_TO_TICKS(80));
+        ESP_LOGI(TAG, "XL9555 enables asserted (LoRa+GPS+NFC+SD+amp+kb+drv+gpio)");
+    } else {
+        ESP_LOGW(TAG, "XL9555 init failed: %s — peripherals stay gated off",
+                 esp_err_to_name(xl_err));
     }
 
     // Storage mount (FW-003). Creates the §7.4 directory tree on first
@@ -281,6 +479,10 @@ void app_main(void)
     if (imu_err != ESP_OK) {
         ESP_LOGW(TAG, "IMU init skipped: %s", esp_err_to_name(imu_err));
     }
+
+    // Power management (FW-035). Defaults: dim at 30 s, screen off at
+    // 60 s, light sleep at 5 min. Backlight ACTIVE = full.
+    pageros_power_init(NULL);
 
     // Input router (FW-024): joins both driver queues into one dispatcher
     // and routes events to the focused widget, falling back to the app

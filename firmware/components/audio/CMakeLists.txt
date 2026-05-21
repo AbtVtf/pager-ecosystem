@@ -3,6 +3,6 @@
 idf_component_register(
     SRCS "src/audio.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_common esp_driver_i2s esp_driver_i2c driver
+    REQUIRES esp_common esp_driver_i2s i2c_bus
     PRIV_REQUIRES log freertos
 )
