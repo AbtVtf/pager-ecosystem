@@ -17,6 +17,7 @@
 
 #include "nvs_flash.h"
 
+#include "pageros_display.h"
 #include "pageros_gps.h"
 #include "pageros_identity.h"
 #include "pageros_input.h"
@@ -138,6 +139,23 @@ void app_main(void)
     esp_err_t wifi_err = pageros_wifi_init();
     if (wifi_err != ESP_OK) {
         ESP_LOGW(TAG, "wifi init failed: %s", esp_err_to_name(wifi_err));
+    }
+
+    // Display bring-up (FW-005). Shows a boot splash gradient so the
+    // user sees the panel come alive; the shell (FW-024+ + the
+    // renderer) takes over the framebuffer once it starts.
+    esp_err_t disp_err = pageros_display_init();
+    if (disp_err == ESP_OK) {
+        // SPEC §7.2 step 6 calls for the shell to render the home
+        // screen from a cached Frame; until that lands, a deep-purple
+        // → black vertical gradient is a calm placeholder that also
+        // exercises the present() path end-to-end so a missing-panel
+        // failure shows up at boot rather than at first app open.
+        pageros_display_gradient(pageros_display_rgb565(0x1a, 0x0a, 0x3a),
+                                 pageros_display_rgb565(0x00, 0x00, 0x00));
+        pageros_display_present();
+    } else {
+        ESP_LOGW(TAG, "display init failed: %s", esp_err_to_name(disp_err));
     }
 
     // GPS bring-up (FW-011). Soft-fails: if the receiver isn't present

@@ -10,6 +10,7 @@ idf_component_register(
         identity
         storage
         network
+        display
         nvs_flash
         app_update
         esp_hw_support
