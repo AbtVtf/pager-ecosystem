@@ -4,10 +4,21 @@
 
 #include "pageros_widgets.h"
 
+#include <math.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
+
+// Image widget (FW-021) consumes the image_cache; declared weakly here
+// so the renderer compiles even on host builds that don't link it.
+// At link time on-device the real symbol from `image_cache` wins.
+extern esp_err_t pageros_image_cache_decode(const char *sha256_hex,
+                                            uint8_t **out_rgba,
+                                            int *out_w, int *out_h)
+    __attribute__((weak));
 
 static const char *TAG = "widgets";
 
@@ -288,6 +299,189 @@ static int draw_form(const pageros_widgets_ctx_t *ctx, int y, const pgr_cbor_val
     return cur_y - y;
 }
 
+// ---- image widget (FW-021) ---------------------------------------- //
+//
+// src is "img:<sha256_hex>"; we look it up in the image cache and blit
+// the decoded RGB565 into the framebuffer. Cache misses render a
+// labelled placeholder so the screen doesn't reflow when the image
+// later arrives.
+
+static inline uint16_t rgba_to_565(uint8_t r, uint8_t g, uint8_t b)
+{
+    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+}
+
+static int draw_image(const pageros_widgets_ctx_t *ctx, int y, const pgr_cbor_value_t *w)
+{
+    size_t slen; const char *src = map_text(w, "src", &slen);
+    int target_w = (int)map_int(w, "w", 96);
+    int target_h = (int)map_int(w, "h", 96);
+    if (target_w <= 0 || target_h <= 0 || target_w > PAGEROS_WIDGETS_SCREEN_W) {
+        target_w = 96; target_h = 96;
+    }
+    int x = (PAGEROS_WIDGETS_SCREEN_W - target_w) / 2;
+
+    // Empty / non-img: placeholder.
+    if (!src || slen < 5 || memcmp(src, "img:", 4) != 0) {
+        pageros_widgets_outline_rect(&ctx->canvas, x, y, target_w, target_h, ctx->palette.dim);
+        return target_h + 4;
+    }
+    char hex[65];
+    size_t hex_len = slen - 4;
+    if (hex_len > 64) hex_len = 64;
+    memcpy(hex, src + 4, hex_len);
+    hex[hex_len] = '\0';
+
+    if (!pageros_image_cache_decode || hex_len != 64) {
+        pageros_widgets_outline_rect(&ctx->canvas, x, y, target_w, target_h, ctx->palette.dim);
+        pageros_fonts_draw_text(&ctx->canvas, x + 4, y + target_h / 2 - 4,
+                                "[img]", 5, ctx->palette.dim, target_w - 8);
+        return target_h + 4;
+    }
+    uint8_t *rgba = NULL; int iw = 0, ih = 0;
+    esp_err_t r = pageros_image_cache_decode(hex, &rgba, &iw, &ih);
+    if (r != ESP_OK || !rgba) {
+        pageros_widgets_outline_rect(&ctx->canvas, x, y, target_w, target_h, ctx->palette.dim);
+        pageros_fonts_draw_text(&ctx->canvas, x + 4, y + target_h / 2 - 4,
+                                "[load]", 6, ctx->palette.dim, target_w - 8);
+        if (rgba) free(rgba);
+        return target_h + 4;
+    }
+
+    // Simple nearest-neighbour blit, clamped to the declared box.
+    int draw_w = iw < target_w ? iw : target_w;
+    int draw_h = ih < target_h ? ih : target_h;
+    int ox = x + (target_w - draw_w) / 2;
+    int oy = y + (target_h - draw_h) / 2;
+    for (int j = 0; j < draw_h; j++) {
+        for (int i = 0; i < draw_w; i++) {
+            const uint8_t *px = rgba + (j * iw + i) * 4;
+            if (px[3] < 0x20) continue;  // skip transparent
+            pix(&ctx->canvas, ox + i, oy + j, rgba_to_565(px[0], px[1], px[2]));
+        }
+    }
+    free(rgba);
+    return target_h + 4;
+}
+
+// ---- map widget (FW-022) v0 --------------------------------------- //
+//
+// Renders a placeholder map background plus a centered GPS marker.
+// Real OSM tile fetching + rendering lives behind the SD tile cache
+// (see firmware/components/storage's /cache/tiles/) and the network
+// HTTPS client; the wiring is staged for a follow-up so the widget
+// renderer can ship now without an OSM dependency at compile time.
+
+static int draw_map(const pageros_widgets_ctx_t *ctx, int y, const pgr_cbor_value_t *w)
+{
+    int box_h = 96;
+    int box_y = y;
+    pageros_widgets_fill_rect(&ctx->canvas, 0, box_y, PAGEROS_WIDGETS_SCREEN_W, box_h,
+                              ctx->palette.bg);
+    // Subtle grid hint that this is the map area (without OSM tiles).
+    for (int gy = box_y; gy < box_y + box_h; gy += 16) {
+        pageros_widgets_fill_rect(&ctx->canvas, 0, gy, PAGEROS_WIDGETS_SCREEN_W, 1,
+                                  ctx->palette.dim);
+    }
+    for (int gx = 0; gx < PAGEROS_WIDGETS_SCREEN_W; gx += 16) {
+        pageros_widgets_fill_rect(&ctx->canvas, gx, box_y, 1, box_h,
+                                  ctx->palette.dim);
+    }
+
+    // GPS marker — center of the box, accent-coloured dot ring.
+    int cx = PAGEROS_WIDGETS_SCREEN_W / 2;
+    int cy = box_y + box_h / 2;
+    for (int j = -3; j <= 3; j++) {
+        for (int i = -3; i <= 3; i++) {
+            if (i * i + j * j <= 9) pix(&ctx->canvas, cx + i, cy + j, ctx->palette.accent);
+        }
+    }
+    pageros_widgets_outline_rect(&ctx->canvas, cx - 6, cy - 6, 13, 13, ctx->palette.fg);
+
+    // Caption: lat/lon if present.
+    const pgr_cbor_value_t *lat = map_get(w, "lat");
+    const pgr_cbor_value_t *lon = map_get(w, "lon");
+    char caption[64];
+    int n = -1;
+    if (lat && lon && lat->kind == PGR_CBOR_KIND_FLOAT && lon->kind == PGR_CBOR_KIND_FLOAT) {
+        n = snprintf(caption, sizeof(caption), "%.4f, %.4f", lat->v.dbl, lon->v.dbl);
+    } else {
+        n = snprintf(caption, sizeof(caption), "no fix");
+    }
+    pageros_fonts_draw_text(&ctx->canvas, 4, box_y + box_h - 10, caption, n,
+                            ctx->palette.dim, PAGEROS_WIDGETS_SCREEN_W - 8);
+    return box_h + 4;
+}
+
+// ---- presence_list (FW-023) --------------------------------------- //
+
+static int draw_presence(const pageros_widgets_ctx_t *ctx, int y, const pgr_cbor_value_t *w)
+{
+    const pgr_cbor_value_t *members = map_get(w, "members");
+    if (!members || members->kind != PGR_CBOR_KIND_ARRAY) return 0;
+    int consumed = 0;
+    int row_h = 12;
+    int max_rows = 6;
+    int count = (int)members->v.arr.len;
+    if (count > max_rows) count = max_rows;
+    pageros_fonts_draw_text(&ctx->canvas, 4, y, "Presence", 8, ctx->palette.dim, 100);
+    consumed += 10;
+    for (int i = 0; i < count; i++) {
+        const pgr_cbor_value_t *m = &members->v.arr.items[i];
+        if (m->kind != PGR_CBOR_KIND_MAP) continue;
+        size_t nlen; const char *name = map_text(m, "name", &nlen);
+        const pgr_cbor_value_t *online_v = map_get(m, "online");
+        bool online = online_v && online_v->kind == PGR_CBOR_KIND_BOOL && online_v->v.boolean;
+        // ● dot for online, ○ for offline (drawn as filled vs outlined small box)
+        if (online) {
+            pageros_widgets_fill_rect(&ctx->canvas, 6, y + consumed + 2, 6, 6, ctx->palette.accent);
+        } else {
+            pageros_widgets_outline_rect(&ctx->canvas, 6, y + consumed + 2, 6, 6, ctx->palette.dim);
+        }
+        if (name) {
+            pageros_fonts_draw_text(&ctx->canvas, 16, y + consumed + 1,
+                                    name, (int)nlen, ctx->palette.fg, 200);
+        }
+        consumed += row_h;
+    }
+    return consumed + 4;
+}
+
+// ---- chat (FW-023) ------------------------------------------------ //
+
+static int draw_chat(const pageros_widgets_ctx_t *ctx, int y, const pgr_cbor_value_t *w)
+{
+    const pgr_cbor_value_t *msgs = map_get(w, "messages");
+    int avail = PAGEROS_WIDGETS_BODY_Y + PAGEROS_WIDGETS_BODY_H - y - 22; // reserve for composer
+    int row_h = 12;
+    int max_rows = avail / row_h;
+    int total = (msgs && msgs->kind == PGR_CBOR_KIND_ARRAY) ? (int)msgs->v.arr.len : 0;
+    int start = total > max_rows ? total - max_rows : 0;
+    int cy = y;
+    for (int i = start; i < total; i++) {
+        const pgr_cbor_value_t *m = &msgs->v.arr.items[i];
+        if (m->kind != PGR_CBOR_KIND_MAP) continue;
+        size_t flen; const char *from = map_text(m, "from", &flen);
+        size_t slen; const char *s = map_text(m, "s", &slen);
+        char line[160];
+        int n = snprintf(line, sizeof(line), "%.*s: %.*s",
+                         (int)(flen < 16 ? flen : 16), from ? from : "?",
+                         (int)(slen < 80 ? slen : 80), s ? s : "");
+        if (n < 0) n = 0;
+        if (n >= (int)sizeof(line)) n = sizeof(line) - 1;
+        pageros_fonts_draw_text(&ctx->canvas, 4, cy, line, n,
+                                ctx->palette.fg, PAGEROS_WIDGETS_SCREEN_W - 8);
+        cy += row_h;
+    }
+    // Composer line at the bottom of the chat box.
+    int composer_y = y + avail + 4;
+    pageros_widgets_outline_rect(&ctx->canvas, 4, composer_y,
+                                 PAGEROS_WIDGETS_SCREEN_W - 8, 14, ctx->palette.dim);
+    pageros_fonts_draw_text(&ctx->canvas, 8, composer_y + 3, "Type…", 5,
+                            ctx->palette.dim, PAGEROS_WIDGETS_SCREEN_W - 16);
+    return composer_y + 18 - y;
+}
+
 // ---- top/bottom chrome -------------------------------------------- //
 
 static void draw_topbar(const pageros_widgets_ctx_t *ctx)
@@ -354,6 +548,10 @@ esp_err_t pageros_widgets_render_screen(const pageros_widgets_ctx_t *ctx,
         else if (tag_is(w, "list"))         dy = draw_list(ctx, y, w, (int)i);
         else if (tag_is(w, "input"))        dy = draw_input(ctx, y, w, widget_focused);
         else if (tag_is(w, "form"))         dy = draw_form(ctx, y, w, (int)i);
+        else if (tag_is(w, "image"))        dy = draw_image(ctx, y, w);
+        else if (tag_is(w, "map"))          dy = draw_map(ctx, y, w);
+        else if (tag_is(w, "presence_list"))dy = draw_presence(ctx, y, w);
+        else if (tag_is(w, "chat"))         dy = draw_chat(ctx, y, w);
         else {
             // Unknown widget — render a placeholder per SPEC §5.3.
             char buf[40];
@@ -389,6 +587,18 @@ int pageros_widgets_measure(const pgr_cbor_value_t *w)
         int n = (fields && fields->kind == PGR_CBOR_KIND_ARRAY) ? (int)fields->v.arr.len : 0;
         return n * 30 + 22 + 4;
     }
+    if (tag_is(w, "image")) {
+        int h = (int)map_int(w, "h", 96);
+        return h + 4;
+    }
+    if (tag_is(w, "map")) return 96 + 4;
+    if (tag_is(w, "presence_list")) {
+        const pgr_cbor_value_t *m = map_get(w, "members");
+        int n = (m && m->kind == PGR_CBOR_KIND_ARRAY) ? (int)m->v.arr.len : 0;
+        if (n > 6) n = 6;
+        return 10 + n * 12 + 4;
+    }
+    if (tag_is(w, "chat")) return PAGEROS_WIDGETS_BODY_H;  // takes remaining body
     return 12;
 }
 
