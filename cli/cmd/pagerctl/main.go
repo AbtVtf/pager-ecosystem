@@ -53,7 +53,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "pagerctl init: %v\n", err)
 			os.Exit(1)
 		}
-	case "dev", "simulate", "link":
+	case "simulate":
+		if err := runSimulate(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "pagerctl simulate: %v\n", err)
+			os.Exit(1)
+		}
+	case "dev", "link":
 		fmt.Fprintf(os.Stderr, "pagerctl: %q is not implemented yet\n", os.Args[1])
 		os.Exit(1)
 	default:

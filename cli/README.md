@@ -11,6 +11,25 @@ go build -o pagerctl ./cmd/pagerctl
 ./pagerctl version
 ```
 
+## Simulate a remote app (CLI-003)
+
+```sh
+pagerctl simulate http://localhost:8080/
+pagerctl simulate https://app.example.com/
+```
+
+The `simulate` command spawns the PagerOS simulator preconfigured for direct
+mode against the given URL (via the `PAGEROS_SIMULATOR_URL` env-var contract
+defined by SIM-EXT-001). The simulator window stays open until you close it.
+
+Flags:
+
+- `--bin <path>` — simulator binary path. Defaults to `$PAGEROS_SIMULATOR_BIN`,
+  then `pageros-simulator` on `PATH`.
+
+Requires the [PagerOS Simulator](../simulator) installed (see
+`simulator/RELEASING.md` for bundles).
+
 ## Flash firmware (CLI-005)
 
 ```sh
