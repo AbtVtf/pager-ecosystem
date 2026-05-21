@@ -217,9 +217,13 @@ static void render_foreground(void)
 // "shell key: row=X col=Y char='?'" log line on every press lets the
 // user correct the map if any key lands wrong. Unmapped cells return 0.
 
+// Update once we know the real cells: the back-arrow / delete key
+// should map to '\b' (0x08) so the input handler treats it as
+// backspace. Every key press logs its row/col over serial — press
+// the key you want to be backspace and tell me the numbers.
 static const char keymap_lower[4][10] = {
     /* row 0 */ {'q','w','e','r','t','y','u','i','o','p'},
-    /* row 1 */ {'a','s','d','f','g','h','j','k','l',  0 },
+    /* row 1 */ {'a','s','d','f','g','h','j','k','l', '\b'},
     /* row 2 */ {'z','x','c','v','b','n','m',',','.',  0 },
     /* row 3 */ { 0 , 0 ,' ', 0 , 0 , 0 , 0 ,'/','-', 0 },
 };
@@ -247,6 +251,7 @@ static void mount_and_render(esp_err_t (*emit)(uint8_t *, size_t, size_t *))
 
 static void mount_home(void)
 {
+    ESP_LOGI("shell", "mount_home");
     s.page = SHELL_PAGE_HOME;
     s.focus.widget_index = 1; s.focus.item_index = 0;
     s.text_input_widget = -1; s.text_buf = NULL; s.text_cap = 0;
@@ -256,6 +261,7 @@ static void mount_home(void)
 
 static void mount_settings(void)
 {
+    ESP_LOGI("shell", "mount_settings");
     s.page = SHELL_PAGE_SETTINGS;
     s.focus.widget_index = 1; s.focus.item_index = 0;
     s.text_input_widget = -1; s.text_buf = NULL; s.text_cap = 0;
@@ -276,6 +282,7 @@ static esp_err_t emit_wifi_thunk(uint8_t *b, size_t c, size_t *n)
 
 static void mount_wifi(void)
 {
+    ESP_LOGI("shell", "mount_wifi");
     s.page = SHELL_PAGE_WIFI;
     s.focus.widget_index = 2;       // first input (SSID) in the body
     s.focus.item_index = 0;
@@ -302,6 +309,7 @@ static esp_err_t emit_addapp_thunk(uint8_t *b, size_t c, size_t *n)
 
 static void mount_add_app(void)
 {
+    ESP_LOGI("shell", "mount_add_app");
     s.page = SHELL_PAGE_ADD_APP;
     s.focus.widget_index = 3;       // URL input (heading=0, [notif?], hint, input, install, back)
     if (s.addapp_msg[0]) s.focus.widget_index = 4;  // shift down if notif visible
@@ -476,6 +484,21 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
     const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
     bool dirty = false;
 
+    // Verbose event log — helps diagnose phantom navigation. Drop or
+    // demote to LOGD once the input chain is trusted.
+    const char *kind = "?";
+    switch (ev->kind) {
+    case PAGEROS_ROUTER_EVT_ENCODER: kind = "ENC"; break;
+    case PAGEROS_ROUTER_EVT_NAV:     kind = "NAV"; break;
+    case PAGEROS_ROUTER_EVT_KEY:     kind = "KEY"; break;
+    default: kind = "NONE";
+    }
+    int detail = 0;
+    if (ev->kind == PAGEROS_ROUTER_EVT_ENCODER) detail = ev->as.enc;
+    else if (ev->kind == PAGEROS_ROUTER_EVT_NAV) detail = ev->as.nav;
+    ESP_LOGI("shell", "EVT %s (%d) page=%d focus.w=%d focus.i=%d",
+             kind, detail, (int)s.page, s.focus.widget_index, s.focus.item_index);
+
     switch (ev->kind) {
     case PAGEROS_ROUTER_EVT_ENCODER: {
         int step = (ev->as.enc == PAGEROS_ROUTER_ENC_CW) ? +1 : -1;
@@ -524,8 +547,12 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
             }
             if (href) {
                 ESP_LOGI("shell", "ENTER → %s", href);
+                // handle_button_href mounts a new page when applicable
+                // and that mount already renders. Don't set dirty=true
+                // afterwards — the fall-through re-render at the end of
+                // this handler would queue a SECOND present in quick
+                // succession and overflow the SPI transmit queue.
                 handle_button_href(href);
-                dirty = true;
             }
         } else if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK_LONG) {
             // Long press: always go back to Home regardless of state.
@@ -550,18 +577,24 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
     case PAGEROS_ROUTER_EVT_KEY: {
         if (!ev->as.key.pressed) return true;  // act on press, ignore release
         char c = keymap_lookup(ev->as.key.row, ev->as.key.col);
-        ESP_LOGI("shell", "key r=%u c=%u %s ch='%c'(0x%02x)",
+        ESP_LOGI("shell", "key r=%u c=%u ch='%c'(0x%02x)%s",
                  ev->as.key.row, ev->as.key.col,
-                 ev->as.key.pressed ? "DN" : "UP",
-                 (c >= 0x20 && c < 0x7f) ? c : '?', (unsigned)c);
-        if (c == 0 || !s.text_buf) return true;
+                 (c >= 0x20 && c < 0x7f) ? c : '?', (unsigned)c,
+                 c == 0 ? " UNMAPPED" : "");
+        if (!s.text_buf) break;
+        if (c == '\b' || c == 0x7f) {            // Backspace key on the matrix
+            size_t L = strlen(s.text_buf);
+            if (L > 0) { s.text_buf[L - 1] = '\0'; dirty = true; }
+            break;
+        }
+        if (c == 0) break;                       // unmapped — bubble to logs
         size_t L = strlen(s.text_buf);
         if (L + 1 < s.text_cap) {
             s.text_buf[L] = c;
             s.text_buf[L + 1] = '\0';
             dirty = true;
         }
-        return true;
+        break;
     }
     default:
         return false;
@@ -675,6 +708,23 @@ void app_main(void)
                  esp_err_to_name(xl_err));
     }
 
+    // Display bring-up (FW-005) BEFORE storage. The display, SD card,
+    // and LoRa all share SPI2_HOST; the display's CS=38 has no
+    // external pull-up so it floats until the display driver
+    // configures it as a driven-HIGH output. If storage init runs
+    // first, the SD's SPI transactions reach the ST7796 (which has
+    // no hardware reset pin: DISP_PIN_RST = -1, so it can't be
+    // recovered) and the panel locks up showing black even though
+    // our subsequent render reports success. Initialising display
+    // first parks CS=38 high so SD traffic stays on the SD only.
+    esp_err_t disp_err = pageros_display_init();
+    if (disp_err == ESP_OK) {
+        pageros_display_fill(pageros_display_rgb565(0x00, 0x00, 0x00));
+        pageros_display_present();
+    } else {
+        ESP_LOGW(TAG, "display init failed: %s", esp_err_to_name(disp_err));
+    }
+
     // Storage mount (FW-003). Creates the §7.4 directory tree on first
     // boot. Soft-fails — the shell renders a recovery screen when no
     // card is present (SPEC §7.2 step 4 + docs/user/troubleshooting),
@@ -684,6 +734,10 @@ void app_main(void)
         ESP_LOGW(TAG, "SD mount failed: %s — proceeding without SD",
                  esp_err_to_name(sd_err));
     }
+    // SD init pumps significant traffic on the shared SPI bus; the
+    // ST7796 has been observed to glitch its DISP_ON state during the
+    // SD card's init sequence even with CS deasserted. Re-arm it now.
+    if (disp_err == ESP_OK) (void)pageros_display_panel_reinit();
 
     // Logger (FW-004). Initialise after storage so the first LOG_INFO
     // line lands on /sd/logs/pageros.log; falls back to console-only
@@ -742,18 +796,6 @@ void app_main(void)
                          esp_err_to_name(wc));
             }
         }
-    }
-
-    // Display bring-up (FW-005).
-    esp_err_t disp_err = pageros_display_init();
-    if (disp_err == ESP_OK) {
-        // Paint a solid background first so the panel is fully cleared
-        // before the renderer takes over — otherwise stale PSRAM bytes
-        // bleed through any region the renderer doesn't touch.
-        pageros_display_fill(pageros_display_rgb565(0x00, 0x00, 0x00));
-        pageros_display_present();
-    } else {
-        ESP_LOGW(TAG, "display init failed: %s", esp_err_to_name(disp_err));
     }
 
     // FW-019 / FW-020 / FW-028 / FW-029 — render the Shell home Frame

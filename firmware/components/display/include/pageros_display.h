@@ -32,6 +32,14 @@ extern "C" {
 #define PAGEROS_DISPLAY_FB_BYTES \
     ((size_t)PAGEROS_DISPLAY_WIDTH * PAGEROS_DISPLAY_HEIGHT * PAGEROS_DISPLAY_BPP)
 
+// One row pair at a time → 480 px * 2 rows * 2 bytes = 1920 B per chunk.
+// Tiny on the internal-RAM budget; lets present() stream the whole
+// framebuffer through DMA-capable memory without needing all 213 KB
+// in internal RAM.
+#define PAGEROS_DISPLAY_CHUNK_ROWS  16
+#define PAGEROS_DISPLAY_CHUNK_BYTES \
+    ((size_t)PAGEROS_DISPLAY_WIDTH * PAGEROS_DISPLAY_CHUNK_ROWS * PAGEROS_DISPLAY_BPP)
+
 // Pack 8-bit RGB into RGB565 (panel native format) in big-endian byte
 // order — ST7796 reads MSB first on the SPI wire.
 static inline uint16_t pageros_display_rgb565(uint8_t r, uint8_t g, uint8_t b)
@@ -45,6 +53,13 @@ esp_err_t pageros_display_init(void);
 
 // Tear down the panel, free the framebuffer, and gate the backlight.
 esp_err_t pageros_display_shutdown(void);
+
+// Re-send the ST7796 init sequence + orientation + gap to recover from
+// a panel-state corruption (we've seen the SD card's traffic on the
+// shared SPI bus glitch the panel even when CS=38 is high; calling
+// this after storage_init() forcibly re-arms the controller). Safe to
+// call repeatedly; cheap (~100 ms of SPI writes).
+esp_err_t pageros_display_panel_reinit(void);
 
 // Return a writable pointer to the RGB565 framebuffer (480*222*2 bytes,
 // PSRAM-allocated). NULL before `pageros_display_init`. Pixels are laid

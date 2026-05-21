@@ -208,23 +208,24 @@ static esp_err_t panel_st7796_draw_bitmap(esp_lcd_panel_t *panel, int x_start, i
     y_end += st7796->y_gap;
 
     // define an area of frame memory where MCU can access
-    esp_lcd_panel_io_tx_param(io, LCD_CMD_CASET, (uint8_t[]) {
+    esp_err_t r;
+    r = esp_lcd_panel_io_tx_param(io, LCD_CMD_CASET, (uint8_t[]) {
         (x_start >> 8) & 0xFF,
         x_start & 0xFF,
         ((x_end - 1) >> 8) & 0xFF,
         (x_end - 1) & 0xFF,
     }, 4);
-    esp_lcd_panel_io_tx_param(io, LCD_CMD_RASET, (uint8_t[]) {
+    if (r != ESP_OK) return r;
+    r = esp_lcd_panel_io_tx_param(io, LCD_CMD_RASET, (uint8_t[]) {
         (y_start >> 8) & 0xFF,
         y_start & 0xFF,
         ((y_end - 1) >> 8) & 0xFF,
         (y_end - 1) & 0xFF,
     }, 4);
+    if (r != ESP_OK) return r;
     // transfer frame buffer
     size_t len = (x_end - x_start) * (y_end - y_start) * st7796->fb_bits_per_pixel / 8;
-    esp_lcd_panel_io_tx_color(io, LCD_CMD_RAMWR, color_data, len);
-
-    return ESP_OK;
+    return esp_lcd_panel_io_tx_color(io, LCD_CMD_RAMWR, color_data, len);
 }
 
 static esp_err_t panel_st7796_invert_color(esp_lcd_panel_t *panel, bool invert_color_data)

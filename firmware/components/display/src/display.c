@@ -17,6 +17,7 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_lcd_st7796.h"
@@ -57,8 +58,23 @@ static struct {
     bool                  spi_up;
     esp_lcd_panel_io_handle_t io;
     esp_lcd_panel_handle_t    panel;
-    uint16_t              *framebuffer;
+    uint16_t              *framebuffer;   // CPU-side, host-endian RGB565
+    uint16_t              *wire_buf;      // SPI-side, big-endian RGB565
 } s_state;
+
+// IDF's esp_lcd_panel_io_spi reclaims a descriptor from its internal
+// pool inside the SPI completion callback chain — but only if a
+// user `on_color_trans_done` is registered. Without one, descriptors
+// leak and trans_pool drains until the next color_tx fails to grab
+// a slot ("spi transmit (queue) color failed"). This no-op handler
+// keeps the reclaim path alive without any actual notification.
+static bool IRAM_ATTR panel_io_trans_done_noop(esp_lcd_panel_io_handle_t io,
+                                               esp_lcd_panel_io_event_data_t *edata,
+                                               void *user_ctx)
+{
+    (void)io; (void)edata; (void)user_ctx;
+    return false;
+}
 
 // ---------------------------------------------------------------------------
 // Backlight (LEDC PWM on GPIO 42)
@@ -108,7 +124,8 @@ static esp_err_t spi_bus_up_once(void)
         .sclk_io_num     = DISP_PIN_SCK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = PAGEROS_DISPLAY_WIDTH * 40 * 2,  // ~40 lines/DMA
+        // One band per DMA transaction; present() loops over bands.
+        .max_transfer_sz = PAGEROS_DISPLAY_CHUNK_BYTES + 256,
     };
     esp_err_t err = spi_bus_initialize(DISP_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
     if (err == ESP_ERR_INVALID_STATE) {
@@ -133,9 +150,10 @@ esp_err_t pageros_display_init(void)
         .dc_gpio_num         = DISP_PIN_DC,
         .spi_mode            = 0,
         .pclk_hz             = DISP_PIXEL_CLK_HZ,
-        .trans_queue_depth   = 10,
+        .trans_queue_depth   = 32,
         .lcd_cmd_bits        = 8,
         .lcd_param_bits      = 8,
+        .on_color_trans_done = panel_io_trans_done_noop,
     };
     ESP_RETURN_ON_ERROR(
         esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)DISP_SPI_HOST,
@@ -180,13 +198,20 @@ esp_err_t pageros_display_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_state.panel, true),
                         TAG, "disp on");
 
-    // PSRAM framebuffer. ~213 KB at 480x222x2.
+    // PSRAM framebuffer (host-endian); SPI DMA on the LILYGO board's
+    // QSPI PSRAM doesn't accept transfers directly so we ship pixels
+    // through a small chunk-sized wire buffer in DMA-capable internal
+    // RAM. Tradeoff: present() loops N times instead of one big DMA,
+    // but each loop is < 20 ms and the queue never sees more than a
+    // single chunk in flight.
     s_state.framebuffer = heap_caps_malloc(PAGEROS_DISPLAY_FB_BYTES,
-                                            MALLOC_CAP_SPIRAM
-                                            | MALLOC_CAP_8BIT);
-    if (!s_state.framebuffer) {
-        ESP_LOGE(TAG, "PSRAM framebuffer alloc (%u bytes) failed",
-                 (unsigned)PAGEROS_DISPLAY_FB_BYTES);
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_state.wire_buf    = heap_caps_malloc(PAGEROS_DISPLAY_CHUNK_BYTES,
+                                            MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (!s_state.framebuffer || !s_state.wire_buf) {
+        ESP_LOGE(TAG, "framebuffer alloc (fb=%u + wire=%u bytes) failed",
+                 (unsigned)PAGEROS_DISPLAY_FB_BYTES,
+                 (unsigned)PAGEROS_DISPLAY_CHUNK_BYTES);
         return ESP_ERR_NO_MEM;
     }
     memset(s_state.framebuffer, 0, PAGEROS_DISPLAY_FB_BYTES);
@@ -211,7 +236,29 @@ esp_err_t pageros_display_shutdown(void)
         heap_caps_free(s_state.framebuffer);
         s_state.framebuffer = NULL;
     }
+    if (s_state.wire_buf) {
+        heap_caps_free(s_state.wire_buf);
+        s_state.wire_buf = NULL;
+    }
     s_state.ready = false;
+    return ESP_OK;
+}
+
+esp_err_t pageros_display_panel_reinit(void)
+{
+    if (!s_state.ready || !s_state.panel) return ESP_ERR_INVALID_STATE;
+    // Re-run the init sequence: reset (software, no RST pin), init,
+    // orientation, gap, invert, display on. This is the same sequence
+    // pageros_display_init() runs the first time, minus the SPI bus +
+    // panel object creation (those stay valid).
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_state.panel),                  TAG, "re-reset");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_state.panel),                   TAG, "re-init");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_swap_xy(s_state.panel, true),          TAG, "re-swap");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_state.panel, true, true),     TAG, "re-mirror");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_set_gap(s_state.panel, 0, 49),         TAG, "re-gap");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_state.panel, true),     TAG, "re-invert");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_state.panel, true),      TAG, "re-disp on");
+    ESP_LOGI(TAG, "panel re-armed after bus disturbance");
     return ESP_OK;
 }
 
@@ -281,20 +328,31 @@ esp_err_t pageros_display_blit(int x, int y, int w, int h,
 
 esp_err_t pageros_display_present(void)
 {
-    if (!s_state.ready || !s_state.framebuffer) return ESP_ERR_INVALID_STATE;
-    // ST7796 over SPI consumes RGB565 bytes big-endian on the wire, but
-    // our framebuffer stores them as native uint16_t (little-endian on
-    // ESP32-S3). Byte-swap in place before draw_bitmap, then swap back
-    // so the renderer can keep reading/writing in host order. Cost is
-    // ~150 KB swaps on a 480x320 frame — sub-millisecond on the S3.
-    uint16_t *fb = s_state.framebuffer;
-    size_t n = (size_t)PAGEROS_DISPLAY_WIDTH * PAGEROS_DISPLAY_HEIGHT;
-    for (size_t i = 0; i < n; i++) fb[i] = __builtin_bswap16(fb[i]);
-    esp_err_t r = esp_lcd_panel_draw_bitmap(s_state.panel,
-                                            0, 0,
-                                            PAGEROS_DISPLAY_WIDTH,
-                                            PAGEROS_DISPLAY_HEIGHT,
-                                            s_state.framebuffer);
-    for (size_t i = 0; i < n; i++) fb[i] = __builtin_bswap16(fb[i]);
-    return r;
+    if (!s_state.ready || !s_state.framebuffer || !s_state.wire_buf)
+        return ESP_ERR_INVALID_STATE;
+
+    // Stream the framebuffer to the panel in CHUNK_ROWS-tall bands.
+    // Each band fits in the small DMA-capable wire buffer. ST7796
+    // over SPI expects RGB565 big-endian; the framebuffer stores
+    // host-endian uint16_t so we byte-swap as we copy.
+    const int H = PAGEROS_DISPLAY_HEIGHT;
+    const int W = PAGEROS_DISPLAY_WIDTH;
+    for (int y = 0; y < H; y += PAGEROS_DISPLAY_CHUNK_ROWS) {
+        int rows = (y + PAGEROS_DISPLAY_CHUNK_ROWS <= H)
+                       ? PAGEROS_DISPLAY_CHUNK_ROWS : (H - y);
+        const uint16_t *src = s_state.framebuffer + y * W;
+        uint16_t       *dst = s_state.wire_buf;
+        size_t n = (size_t)W * rows;
+        for (size_t i = 0; i < n; i++) dst[i] = __builtin_bswap16(src[i]);
+        esp_err_t r = esp_lcd_panel_draw_bitmap(s_state.panel,
+                                                 0,     y,
+                                                 W, y + rows,
+                                                 s_state.wire_buf);
+        if (r != ESP_OK) {
+            ESP_LOGW(TAG, "draw_bitmap band y=%d returned %s",
+                     y, esp_err_to_name(r));
+            return r;
+        }
+    }
+    return ESP_OK;
 }
