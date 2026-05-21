@@ -211,6 +211,117 @@ func TestNewFillsDefaults(t *testing.T) {
 	}
 }
 
+// stubLimiter is a deterministic RateLimiter the tests can drive
+// without pulling in the real package (keeps the test focused on what
+// Proxy does with a denial, not on bucket math).
+type stubLimiter struct {
+	allow      bool
+	limit      int
+	remaining  int
+	retryAfter time.Duration
+	keys       []string
+}
+
+func (s *stubLimiter) Allow(key string) (bool, int, int, time.Duration) {
+	s.keys = append(s.keys, key)
+	return s.allow, s.limit, s.remaining, s.retryAfter
+}
+
+func TestHandleAllowedRequestForwardsThroughLimiter(t *testing.T) {
+	upstreamHit := false
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit = true
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	limiter := &stubLimiter{allow: true, limit: 60, remaining: 59}
+	raw, env := fixedInner(t, upstream.URL+"/")
+	p := New(Config{HTTPClient: upstream.Client(), RateLimiter: limiter})
+
+	resp, err := p.Handle(context.Background(), lora.Request{Body: raw})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !upstreamHit {
+		t.Error("limiter allowed but upstream was not called")
+	}
+	if !bytes.Equal(resp.Body, []byte("ok")) {
+		t.Errorf("response body: got %q want ok", string(resp.Body))
+	}
+	if len(limiter.keys) != 1 {
+		t.Fatalf("limiter called %d times, want 1", len(limiter.keys))
+	}
+	if limiter.keys[0] != string(env.From) {
+		t.Errorf("limiter key: got %x want device pubkey %x", limiter.keys[0], env.From)
+	}
+}
+
+func TestHandleDeniedRequestSkipsUpstreamAndReturnsErrorEnvelope(t *testing.T) {
+	upstreamHit := false
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit = true
+	}))
+	defer upstream.Close()
+
+	limiter := &stubLimiter{allow: false, limit: 60, remaining: 0, retryAfter: 7 * time.Second}
+	raw, _ := fixedInner(t, upstream.URL+"/")
+	p := New(Config{HTTPClient: upstream.Client(), RateLimiter: limiter})
+
+	resp, err := p.Handle(context.Background(), lora.Request{Body: raw})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if upstreamHit {
+		t.Fatal("limiter denied but upstream was still called")
+	}
+	env, ok := DecodeErrorEnvelope(resp.Body)
+	if !ok {
+		t.Fatalf("response body is not an exit-node error envelope: %x", resp.Body)
+	}
+	if env.Code != ErrCodeRateLimited {
+		t.Errorf("code: got %q want %q", env.Code, ErrCodeRateLimited)
+	}
+	if env.RetryAfterSec != 7 {
+		t.Errorf("retry_after_s: got %d want 7", env.RetryAfterSec)
+	}
+	if !strings.Contains(env.Msg, "60 req/min/device") {
+		t.Errorf("msg should reference cap: got %q", env.Msg)
+	}
+}
+
+func TestHandleNoLimiterAlwaysForwards(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	raw, _ := fixedInner(t, upstream.URL+"/")
+	p := New(Config{HTTPClient: upstream.Client()}) // no RateLimiter
+
+	resp, err := p.Handle(context.Background(), lora.Request{Body: raw})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if !bytes.Equal(resp.Body, []byte("ok")) {
+		t.Errorf("body: got %q want ok", string(resp.Body))
+	}
+}
+
+func TestDecodeErrorEnvelopeRejectsNonErrorBodies(t *testing.T) {
+	// A real upstream response (arbitrary bytes) must not be mistaken
+	// for an error envelope. This is the discriminator contract for the
+	// device SDK: missing/false `exit_node_error` ⇒ pass-through body.
+	if _, ok := DecodeErrorEnvelope([]byte("not cbor at all")); ok {
+		t.Error("non-CBOR body decoded as error envelope")
+	}
+	// A CBOR map without the discriminator must also be rejected.
+	other, _ := EncodeErrorEnvelope(ErrorEnvelope{ExitNodeError: false, Code: "x"})
+	if _, ok := DecodeErrorEnvelope(other); ok {
+		t.Error("CBOR map without exit_node_error=true decoded as error envelope")
+	}
+}
+
 func TestUserAgentOverrideSent(t *testing.T) {
 	var gotUA atomic.Value
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

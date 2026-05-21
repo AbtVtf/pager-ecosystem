@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/pageros/pager-ecosystem/exit-node/internal/lora"
 )
 
@@ -67,6 +68,45 @@ var (
 	ErrResponseTooLarge = errors.New("proxy: upstream response exceeded MaxResponseBytes")
 )
 
+// RateLimiter caps requests per device pubkey (EXIT-004).
+// The proxy keys on the inner envelope's `from` X25519 pubkey.
+//
+// Implementations must be safe for concurrent use. A nil RateLimiter
+// disables limiting.
+type RateLimiter interface {
+	// Allow consumes one token for key (the device pubkey, as a string of
+	// the raw 32 bytes). Returns (allowed=true) with diagnostic limit
+	// info, or (allowed=false, retryAfter>0) when over the cap.
+	Allow(key string) (allowed bool, limit int, remaining int, retryAfter time.Duration)
+}
+
+// ErrorEnvelope is the CBOR shape returned to a device when the
+// exit-node itself rejects the request (e.g. rate-limit). It is
+// intentionally NOT a Frame (protocol/spec.md §7.4.1) so device SDKs
+// can distinguish transport-level errors from app-level error frames:
+// the top-level discriminator field `exit_node_error: true` is unique
+// to this shape.
+//
+// Wire form (deterministic CBOR):
+//
+//	{
+//	  "exit_node_error": true,
+//	  "code":            tstr,           // machine-readable, e.g. "rate_limited"
+//	  "msg":             tstr,           // human-readable
+//	  "retry_after_s":   uint (optional) // hint, seconds
+//	}
+type ErrorEnvelope struct {
+	ExitNodeError bool   `cbor:"exit_node_error"`
+	Code          string `cbor:"code"`
+	Msg           string `cbor:"msg"`
+	RetryAfterSec uint64 `cbor:"retry_after_s,omitempty"`
+}
+
+// Error codes emitted in ErrorEnvelope.Code.
+const (
+	ErrCodeRateLimited = "rate_limited"
+)
+
 // Config parameterises a Proxy.
 type Config struct {
 	// HTTPClient overrides the default client. Tests use httptest's
@@ -93,6 +133,13 @@ type Config struct {
 	// Logger for non-fatal diagnostics (upstream error bodies, oversize
 	// truncations). nil disables logging.
 	Logger *log.Logger
+
+	// RateLimiter, if non-nil, gates each Handle call by the inner
+	// envelope's `from` device pubkey. Over-limit requests skip the
+	// upstream HTTPS call entirely and return an EncodeErrorEnvelope
+	// payload to the caller as a successful Response (the loop sends it
+	// back over LoRa unchanged). EXIT-004 / SPEC.md §11.2.
+	RateLimiter RateLimiter
 }
 
 // Proxy implements lora.Handler.
@@ -101,6 +148,7 @@ type Proxy struct {
 	maxBytes  int64
 	userAgent string
 	logger    *log.Logger
+	limiter   RateLimiter
 }
 
 // New builds a Proxy. Defaults are filled per the constants above.
@@ -131,6 +179,7 @@ func New(cfg Config) *Proxy {
 		maxBytes:  cfg.MaxResponseBytes,
 		userAgent: cfg.UserAgent,
 		logger:    cfg.Logger,
+		limiter:   cfg.RateLimiter,
 	}
 }
 
@@ -144,6 +193,36 @@ func (p *Proxy) Handle(ctx context.Context, req lora.Request) (lora.Response, er
 	}
 	if err := lora.ValidateHTTPSTarget(inner); err != nil {
 		return lora.Response{}, fmt.Errorf("%w: %v", ErrNonHTTPS, err)
+	}
+
+	// EXIT-004: cap inbound rate per device pubkey. Rejected requests
+	// return an error envelope as a normal Response so the loop sends
+	// it back over LoRa under the request's MsgID; the device SDK
+	// decodes the CBOR ErrorEnvelope and surfaces the limit to the app.
+	if p.limiter != nil {
+		key := string(inner.From)
+		allowed, limit, _, retry := p.limiter.Allow(key)
+		if !allowed {
+			retrySec := uint64(retry.Round(time.Second) / time.Second)
+			if retrySec == 0 && retry > 0 {
+				retrySec = 1
+			}
+			env := ErrorEnvelope{
+				ExitNodeError: true,
+				Code:          ErrCodeRateLimited,
+				Msg:           fmt.Sprintf("rate limit exceeded: %d req/min/device", limit),
+				RetryAfterSec: retrySec,
+			}
+			body, encErr := EncodeErrorEnvelope(env)
+			if encErr != nil {
+				// Should not happen; if it does, surface as handler error
+				// so the loop counter increments and we log it.
+				return lora.Response{}, fmt.Errorf("proxy: encode rate-limit envelope: %w", encErr)
+			}
+			p.logf("rate-limit: device=%s limit=%d retry_after=%s",
+				base64.StdEncoding.EncodeToString(inner.From), limit, retry)
+			return lora.Response{Body: body}, nil
+		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, inner.To, bytes.NewReader(req.Body))
@@ -183,6 +262,33 @@ func (p *Proxy) Handle(ctx context.Context, req lora.Request) (lora.Response, er
 	}
 
 	return lora.Response{Body: body}, nil
+}
+
+// EncodeErrorEnvelope marshals e to deterministic CBOR bytes (per
+// CBOR core deterministic encoding, matching the rest of the LoRa
+// pipeline's choices in lora.EncodeInner). Exported so cross-impl
+// test vectors and device SDKs can pin the shape.
+func EncodeErrorEnvelope(e ErrorEnvelope) ([]byte, error) {
+	em, err := cbor.CoreDetEncOptions().EncMode()
+	if err != nil {
+		return nil, err
+	}
+	return em.Marshal(e)
+}
+
+// DecodeErrorEnvelope parses an ErrorEnvelope from wire bytes. Returns
+// (env, true) only when the body is a CBOR map with
+// `exit_node_error: true` — used by callers (and the device SDK) to
+// distinguish exit-node-emitted errors from app server response bodies.
+func DecodeErrorEnvelope(b []byte) (ErrorEnvelope, bool) {
+	var e ErrorEnvelope
+	if err := cbor.Unmarshal(b, &e); err != nil {
+		return ErrorEnvelope{}, false
+	}
+	if !e.ExitNodeError {
+		return ErrorEnvelope{}, false
+	}
+	return e, true
 }
 
 func (p *Proxy) logf(format string, args ...any) {
