@@ -44,12 +44,19 @@ from nacl.signing import SigningKey
 from pageros.codec import CborDecodeError, decode_frame, encode_frame
 from pageros.ctx import Ctx
 from pageros.encryption import AppKeypair
+from pageros.groups import (
+    GroupBroadcastError,
+    GroupBroadcastResult,
+    normalize_device_pubkey,
+    send_group_push,
+)
 from pageros.lora_budget import check_frame_size
 from pageros.push import (
     DEFAULT_PUSH_RELAY_URL,
     PushConfig,
     PushError,
     PushResult,
+    build_push_body,
     send_push,
 )
 from pageros.signing import ENVIRON_DEVICE_ID
@@ -158,6 +165,20 @@ class App:
         # :meth:`push`.
         self._push_counters: dict[bytes, int] = {}
         self._push_counter_lock = threading.Lock()
+
+        # Group membership registry (PY-007). Apps populate this via
+        # :meth:`add_member` / :meth:`remove_member` (typically in the
+        # join_group / leave_group handlers per SPEC §9.6). The dict
+        # maps group_id → set of raw 32-byte device pubkeys. In-process
+        # only; long-running apps should persist this somewhere.
+        self._groups: dict[str, set[bytes]] = {}
+        self._groups_lock = threading.Lock()
+
+        # Registered group-event handler functions, keyed by event name.
+        # Mirrors :attr:`_routes` but exposes the raw callable to
+        # introspection so tests / docs tooling can list registered
+        # group events without crawling the route table.
+        self._group_event_handlers: dict[str, Handler] = {}
 
     # ----- registration -----
 
@@ -350,6 +371,161 @@ class App:
             counter = self._push_counters.get(device_key, 0)
             self._push_counters[device_key] = counter + 1
             return counter
+
+    # ----- groups (PY-007) -----
+
+    def group_event(self, name: str) -> Callable[[Handler], Handler]:
+        """Register a handler for inbound group events named ``name``.
+
+        Devices (or the dev simulator) POST inbound group activity to
+        ``/group/<name>`` with a CBOR body of ``{"group_id": ..., "data":
+        ...}``. The decorated function may declare any of:
+
+        - ``def fn()`` — no arguments.
+        - ``def fn(request)`` — receives the full :class:`Request`.
+        - ``def fn(group_id, data)`` — two positional args.
+        - ``def fn(ctx, group_id, data)`` — SPEC §8 idiomatic chat
+          example shape (`SPEC.md` §8.2).
+
+        Handlers may return a Frame dict (encoded as CBOR), ``None``
+        (204), or a :class:`Response` for full control. The common
+        pattern is to fan the inbound event back out via
+        :meth:`broadcast` and return ``None``.
+        """
+        if not name:
+            raise ValueError("group_event name must be non-empty")
+        path = f"/group/{name}"
+        route_key = ("POST", path)
+        if route_key in self._routes or name in self._group_event_handlers:
+            raise ValueError(
+                f"duplicate group_event registration for {name!r}"
+            )
+
+        def decorate(fn: Handler) -> Handler:
+            self._group_event_handlers[name] = fn
+
+            def _adapter(request: Request) -> Any:
+                body = request.body if isinstance(request.body, dict) else {}
+                group_id = body.get("group_id")
+                data = body.get("data")
+                return self._invoke_group_event(fn, request, group_id, data)
+
+            self._routes[route_key] = _adapter
+            return fn
+
+        return decorate
+
+    def _invoke_group_event(
+        self,
+        handler: Handler,
+        request: Request,
+        group_id: Any,
+        data: Any,
+    ) -> Any:
+        try:
+            params = inspect.signature(handler).parameters
+        except (TypeError, ValueError):
+            return handler(request.ctx, group_id, data)
+        positional = [
+            p for p in params.values()
+            if p.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        n = len(positional)
+        if n == 0:
+            return handler()
+        if n == 1:
+            return handler(request)
+        if n == 2:
+            return handler(group_id, data)
+        return handler(request.ctx, group_id, data)
+
+    def add_member(
+        self, group_id: str, device_pubkey: bytes | str
+    ) -> None:
+        """Add a device to a group's membership set.
+
+        ``device_pubkey`` may be the raw 32-byte X25519 pubkey or its
+        URL-safe base64 (padded or unpadded) form. Idempotent.
+        """
+        raw, _ = normalize_device_pubkey(device_pubkey)
+        with self._groups_lock:
+            self._groups.setdefault(group_id, set()).add(raw)
+
+    def remove_member(
+        self, group_id: str, device_pubkey: bytes | str
+    ) -> None:
+        """Remove a device from a group. Silent no-op if not present."""
+        raw, _ = normalize_device_pubkey(device_pubkey)
+        with self._groups_lock:
+            members = self._groups.get(group_id)
+            if members is not None:
+                members.discard(raw)
+                if not members:
+                    self._groups.pop(group_id, None)
+
+    def members(self, group_id: str) -> list[bytes]:
+        """Return the raw device pubkeys subscribed to ``group_id``."""
+        with self._groups_lock:
+            return list(self._groups.get(group_id, ()))
+
+    def groups_of(self, device_pubkey: bytes | str) -> list[str]:
+        """Return the group ids the given device is subscribed to."""
+        raw, _ = normalize_device_pubkey(device_pubkey)
+        with self._groups_lock:
+            return [g for g, members in self._groups.items() if raw in members]
+
+    def broadcast(
+        self,
+        group_id: str,
+        event: str,
+        payload: Any,
+        *,
+        recipients: list[bytes | str] | None = None,
+        timeout: float | None = 10.0,
+    ) -> GroupBroadcastResult:
+        """Fan ``event`` out to every device subscribed to ``group_id``.
+
+        Builds one opaque encrypted body per recipient (mirrors
+        :meth:`push`), then POSTs the batch to the Push Relay's
+        ``/group_push`` endpoint. Returns the relay's per-recipient
+        result list — accepted enqueues alongside per-row failures
+        (rate limit, bad device, oversized payload). Whole-batch
+        failures (auth / sig / banned app / 5xx) raise from the
+        underlying :func:`pageros.groups.send_group_push`.
+
+        ``recipients`` overrides the in-process membership set when the
+        caller wants to target an explicit subset (e.g. presence pings
+        to a specific device) without registering in the app's group
+        registry first.
+        """
+        if not event:
+            raise ValueError("broadcast event name must be non-empty")
+        config = self._push_config()
+
+        if recipients is not None:
+            target_ids: list[bytes | str] = list(recipients)
+        else:
+            target_ids = list(self.members(group_id))
+        if not target_ids:
+            raise GroupBroadcastError(
+                f"no recipients for group {group_id!r}"
+            )
+
+        envelope = {"group_id": group_id, "event": event, "data": payload}
+
+        rows: list[tuple[str, bytes]] = []
+        for device_id in target_ids:
+            raw, b64 = normalize_device_pubkey(device_id)
+            counter = self._next_counter(raw)
+            body = build_push_body(
+                self.keypair, raw, envelope, counter=counter  # type: ignore[arg-type]
+            )
+            rows.append((b64, body))
+
+        return send_group_push(config, rows, timeout=timeout)
 
     # ----- HTTP runtime -----
 
