@@ -264,9 +264,19 @@ esp_err_t pageros_display_blit(int x, int y, int w, int h,
 esp_err_t pageros_display_present(void)
 {
     if (!s_state.ready || !s_state.framebuffer) return ESP_ERR_INVALID_STATE;
-    return esp_lcd_panel_draw_bitmap(s_state.panel,
-                                      0, 0,
-                                      PAGEROS_DISPLAY_WIDTH,
-                                      PAGEROS_DISPLAY_HEIGHT,
-                                      s_state.framebuffer);
+    // ST7796 over SPI consumes RGB565 bytes big-endian on the wire, but
+    // our framebuffer stores them as native uint16_t (little-endian on
+    // ESP32-S3). Byte-swap in place before draw_bitmap, then swap back
+    // so the renderer can keep reading/writing in host order. Cost is
+    // ~150 KB swaps on a 480x320 frame — sub-millisecond on the S3.
+    uint16_t *fb = s_state.framebuffer;
+    size_t n = (size_t)PAGEROS_DISPLAY_WIDTH * PAGEROS_DISPLAY_HEIGHT;
+    for (size_t i = 0; i < n; i++) fb[i] = __builtin_bswap16(fb[i]);
+    esp_err_t r = esp_lcd_panel_draw_bitmap(s_state.panel,
+                                            0, 0,
+                                            PAGEROS_DISPLAY_WIDTH,
+                                            PAGEROS_DISPLAY_HEIGHT,
+                                            s_state.framebuffer);
+    for (size_t i = 0; i < n; i++) fb[i] = __builtin_bswap16(fb[i]);
+    return r;
 }
