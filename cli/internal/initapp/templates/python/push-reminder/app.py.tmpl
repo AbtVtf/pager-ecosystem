@@ -1,0 +1,62 @@
+"""{{.Name}} — a PagerOS push-reminder starter (CLI-007 template: push-reminder).
+
+Skeleton form that *would* schedule a push notification. The actual
+``send_push`` call is commented out because it needs marketplace-
+registered keys; see ``examples/push-reminder`` for a runnable version.
+"""
+
+from pageros import App, Button, Form, Input, List, ListItem, Notification, Screen, Text
+
+app = App(name="{{.Name}}")
+_pending: list[dict] = []
+
+
+@app.screen("/")
+def home():
+    if not _pending:
+        body = [Text(s="No reminders scheduled.", style="dim")]
+    else:
+        body = [List(items=[ListItem(label=r["body"], sub=f"in {r['delay_s']}s") for r in _pending])]
+    body.append(Button(label="New reminder", href="/new"))
+    return Screen(id="scr_home", title="{{.Name}}", body=body)
+
+
+@app.screen("/new")
+def new_form():
+    return Screen(
+        id="scr_new",
+        title="New reminder",
+        body=[
+            Form(
+                action="/schedule",
+                method="POST",
+                fields=[
+                    Input(name="body", label="Message", max=80),
+                    Input(name="delay_s", label="Fire in (seconds)", type="number", value="60"),
+                ],
+                submit="Schedule",
+            ),
+        ],
+    )
+
+
+@app.handler("/schedule", method="POST")
+def schedule(request):
+    payload = request.body if isinstance(request.body, dict) else {}
+    body = (payload.get("body") or "").strip()
+    if not body:
+        return Screen(id="scr_new", title="New reminder",
+                      body=[Notification(s="Body required.", level="error")])
+    try:
+        delay_s = max(0, int(payload.get("delay_s") or 0))
+    except ValueError:
+        delay_s = 60
+    _pending.append({"body": body[:80], "delay_s": delay_s})
+    # In a real app, schedule a push here. See examples/push-reminder.
+    #   from pageros import PushConfig, send_push
+    #   send_push(cfg, request.ctx.device_id, {"title": "Reminder", "body": body, "tone": "default"}, counter=...)
+    return home()
+
+
+if __name__ == "__main__":
+    app.run()

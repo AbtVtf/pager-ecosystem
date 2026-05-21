@@ -61,6 +61,47 @@ func TestRun_PythonScaffold(t *testing.T) {
 	}
 }
 
+// CLI-007 acceptance: every template slug produces a runnable project
+// that includes the shared files plus a template-specific app.py.
+func TestRun_AllTemplatesScaffold(t *testing.T) {
+	shared := []string{"app.py", "manifest.yaml", "requirements.txt", "README.md", ".gitignore"}
+	for _, tmpl := range Templates {
+		t.Run(tmpl, func(t *testing.T) {
+			dir := t.TempDir()
+			res, err := Run(Options{Lang: "python", Template: tmpl, Name: "demo", Dir: dir}, &bytes.Buffer{})
+			if err != nil {
+				t.Fatalf("Run(template=%q): %v", tmpl, err)
+			}
+			for _, f := range shared {
+				if _, err := os.Stat(filepath.Join(res.TargetDir, f)); err != nil {
+					t.Errorf("template %q missing %s: %v", tmpl, f, err)
+				}
+			}
+			appBody, err := os.ReadFile(filepath.Join(res.TargetDir, "app.py"))
+			if err != nil {
+				t.Fatalf("template %q: read app.py: %v", tmpl, err)
+			}
+			if !strings.Contains(string(appBody), `from pageros import`) {
+				t.Errorf("template %q app.py should import pageros, got:\n%s", tmpl, appBody)
+			}
+			if !strings.Contains(string(appBody), `App(name="demo")`) {
+				t.Errorf("template %q app.py should use the project name", tmpl)
+			}
+		})
+	}
+}
+
+func TestRun_UnknownTemplate(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Run(Options{Lang: "python", Template: "no-such", Name: "demo", Dir: dir}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error for unknown template")
+	}
+	if !strings.Contains(err.Error(), "unknown --template") {
+		t.Errorf("error should mention unknown template: %v", err)
+	}
+}
+
 func TestRun_JSReportsNotYet(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{

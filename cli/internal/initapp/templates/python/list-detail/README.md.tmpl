@@ -1,0 +1,15 @@
+# {{.Name}}
+
+A PagerOS list/detail starter — `List` + `ListItem`, query-param-based detail route.
+
+## Run
+
+```sh
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python app.py --host 127.0.0.1 --port 8000
+```
+
+Routes:
+- `GET /` — list of items
+- `GET /item?id=<key>` — detail for the chosen item

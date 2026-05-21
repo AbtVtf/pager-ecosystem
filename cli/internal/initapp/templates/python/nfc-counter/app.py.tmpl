@@ -1,0 +1,42 @@
+"""{{.Name}} — a PagerOS NFC starter (CLI-007 template: nfc-counter).
+
+Demonstrates subscribing to the firmware ``nfc_scan`` event. Counts
+distinct tag UIDs in memory; for a full persisted version see
+``examples/nfc-counter``.
+"""
+
+from collections import Counter
+from pageros import App, List, ListItem, Notification, Screen, Text
+
+app = App(name="{{.Name}}")
+
+_counts: Counter[str] = Counter()
+
+
+@app.screen("/")
+def home(request):
+    body = []
+    flash = (request.query.get("flash") or [""])[0]
+    if flash:
+        body.append(Notification(s=flash, level="info"))
+    if _counts:
+        body.append(List(items=[
+            ListItem(label=uid, sub=f"{n} scan{'s' if n != 1 else ''}")
+            for uid, n in _counts.most_common()
+        ]))
+    else:
+        body.append(Text(s="Tap any NFC tag to count it.", style="dim"))
+    return Screen(id="scr_home", title="{{.Name}}", body=body, subscribe=["nfc_scan"])
+
+
+@app.handler("/event/nfc_scan", method="POST")
+def on_scan(request):
+    payload = request.body if isinstance(request.body, dict) else {}
+    uid = (payload.get("uid") or "").upper()
+    if uid:
+        _counts[uid] += 1
+    return home(request)
+
+
+if __name__ == "__main__":
+    app.run()

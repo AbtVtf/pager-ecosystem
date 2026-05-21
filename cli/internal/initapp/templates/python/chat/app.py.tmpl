@@ -1,0 +1,42 @@
+"""{{.Name}} — a PagerOS chat starter (CLI-007 template: chat).
+
+Tiny single-room multi-device chat using ``Chat`` + ``ChatCompose``.
+For full presence + multi-room + push delivery see ``examples/chat``.
+"""
+
+import time
+from pageros import App, Chat, ChatCompose, ChatMessage, Screen
+
+app = App(name="{{.Name}}")
+
+ROOM = "lobby"
+HISTORY: list[dict] = []
+
+
+@app.screen("/")
+def home(request):
+    return Screen(
+        id="scr_room",
+        title=f"#{ROOM}",
+        body=[
+            Chat(
+                group_id=ROOM,
+                messages=[ChatMessage(from_=m["from"], s=m["s"], ts=int(m["ts"])) for m in HISTORY[-50:]],
+                compose=ChatCompose(name="msg", submit="/send"),
+            ),
+        ],
+        subscribe_groups=[ROOM],
+    )
+
+
+@app.handler("/send", method="POST")
+def send(request):
+    payload = request.body if isinstance(request.body, dict) else {}
+    text = (payload.get("msg") or "").strip()
+    if text:
+        HISTORY.append({"from": request.ctx.device_id[:8] or "anon", "s": text, "ts": int(time.time())})
+    return home(request)
+
+
+if __name__ == "__main__":
+    app.run()

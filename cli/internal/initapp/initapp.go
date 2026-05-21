@@ -24,13 +24,28 @@ var templatesFS embed.FS
 // Languages supported by `pagerctl init`. Order matters — used in CLI help.
 var Languages = []string{"python", "js"}
 
+// Templates supported by `pagerctl init` (CLI-007). The keys are template
+// slugs accepted on the CLI; the order is the display order in help text.
+// Each entry must have a directory at `templates/<lang>/<slug>/` with at
+// minimum `app.py.tmpl` and `README.md.tmpl`.
+var Templates = []string{
+	"hello",
+	"form",
+	"list-detail",
+	"location",
+	"nfc-counter",
+	"chat",
+	"push-reminder",
+}
+
 // Options is the parsed CLI input for `pagerctl init`.
 type Options struct {
-	Lang  string // "python" or "js"
-	Name  string // project name; used as directory name and manifest.name
-	AppID string // manifest id; defaults to "<name>.example.com"-style placeholder
-	Dir   string // parent directory (default: cwd)
-	Force bool   // overwrite an existing non-empty target directory
+	Lang     string // "python" or "js"
+	Template string // template slug from Templates; defaults to "hello"
+	Name     string // project name; used as directory name and manifest.name
+	AppID    string // manifest id; defaults to "<name>.example.com"-style placeholder
+	Dir      string // parent directory (default: cwd)
+	Force    bool   // overwrite an existing non-empty target directory
 }
 
 // Defaults applies sensible defaults to unset fields.
@@ -39,6 +54,14 @@ func (o Options) Defaults() (Options, error) {
 		return o, errors.New("missing --lang (python or js)")
 	}
 	o.Lang = strings.ToLower(o.Lang)
+	if o.Template == "" {
+		o.Template = "hello"
+	}
+	o.Template = strings.ToLower(o.Template)
+	if !templateKnown(o.Template) {
+		return o, fmt.Errorf("unknown --template %q (supported: %s)",
+			o.Template, strings.Join(Templates, ", "))
+	}
 	if o.Name == "" {
 		o.Name = "hello-pageros"
 	}
@@ -57,6 +80,15 @@ func (o Options) Defaults() (Options, error) {
 		o.Dir = cwd
 	}
 	return o, nil
+}
+
+func templateKnown(name string) bool {
+	for _, t := range Templates {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }
 
 // nameRE constrains project names to safe directory/identifier characters.
@@ -145,21 +177,24 @@ type templateData struct {
 	AppID string
 }
 
-// renderTemplates copies and renders every file in templates/<lang>/ into target.
-// The on-disk file name is the template name with ".tmpl" stripped, except
-// "gitignore.tmpl" → ".gitignore" (avoids embed.FS swallowing dotfiles).
+// renderTemplates renders the language's shared files plus the chosen
+// template's app.py.tmpl + README.md.tmpl into target.
+//
+// Layout:
+//
+//   templates/<lang>/*.tmpl                  shared files (manifest, gitignore, requirements)
+//   templates/<lang>/<template>/*.tmpl       per-template files (app.py, README)
+//
+// Per-template files win on name collision, so a template may override a
+// shared file by including its own copy.
 func renderTemplates(opts Options, target string) ([]string, error) {
-	root := "templates/" + opts.Lang
+	sharedRoot := "templates/" + opts.Lang
+	tmplRoot := sharedRoot + "/" + opts.Template
 	data := templateData{Name: opts.Name, AppID: opts.AppID}
 
-	var created []string
-	err := fs.WalkDir(templatesFS, root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
+	rendered := map[string]string{} // outName → source path (template wins over shared)
+
+	renderOne := func(root, path string) error {
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
@@ -188,11 +223,42 @@ func renderTemplates(opts Options, target string) ([]string, error) {
 		if err := f.Close(); err != nil {
 			return err
 		}
-		created = append(created, outName)
+		rendered[outName] = path
 		return nil
+	}
+
+	// 1) Shared files (top-level *.tmpl under templates/<lang>/, NOT recursive).
+	sharedEntries, err := templatesFS.ReadDir(sharedRoot)
+	if err != nil {
+		return nil, fmt.Errorf("read shared %s: %w", sharedRoot, err)
+	}
+	for _, d := range sharedEntries {
+		if d.IsDir() {
+			continue
+		}
+		if err := renderOne(sharedRoot, sharedRoot+"/"+d.Name()); err != nil {
+			return nil, err
+		}
+	}
+
+	// 2) Per-template files (recursive). Template-specific files overwrite
+	// shared files with the same on-disk name.
+	err = fs.WalkDir(templatesFS, tmplRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		return renderOne(tmplRoot, path)
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	created := make([]string, 0, len(rendered))
+	for k := range rendered {
+		created = append(created, k)
 	}
 	return created, nil
 }

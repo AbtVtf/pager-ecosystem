@@ -1,0 +1,58 @@
+"""{{.Name}} — a PagerOS list/detail starter (CLI-007 template: list-detail).
+
+Demonstrates a master/detail navigation: a ``list`` of items, each with
+an ``href`` to a detail screen. The detail screen route uses a ``?id=``
+query param because the v1 SDK router matches paths exactly.
+"""
+
+from pageros import App, Button, List, ListItem, Notification, Screen, Text
+
+app = App(name="{{.Name}}")
+
+# Stand-in data — swap for your real data source.
+ITEMS = {
+    "one":   {"title": "Item one",   "body": "Short blurb for item one."},
+    "two":   {"title": "Item two",   "body": "Short blurb for item two."},
+    "three": {"title": "Item three", "body": "Short blurb for item three."},
+}
+
+
+def _first_q(request, key):
+    vals = request.query.get(key) or []
+    return (vals[0] if vals else "").strip()
+
+
+@app.screen("/")
+def home():
+    return Screen(
+        id="scr_list",
+        title="{{.Name}}",
+        body=[
+            List(items=[
+                ListItem(label=v["title"], href=f"/item?id={k}")
+                for k, v in ITEMS.items()
+            ]),
+        ],
+    )
+
+
+@app.screen("/item")
+def detail(request):
+    item_id = _first_q(request, "id")
+    item = ITEMS.get(item_id)
+    if not item:
+        return Screen(id="scr_404", title="{{.Name}}",
+                      body=[Notification(s="Item not found.", level="error"),
+                            Button(label="Back", href="/")])
+    return Screen(
+        id=f"scr_item_{item_id}",
+        title=item["title"],
+        body=[
+            Text(s=item["body"]),
+            Button(label="Back", href="/"),
+        ],
+    )
+
+
+if __name__ == "__main__":
+    app.run()

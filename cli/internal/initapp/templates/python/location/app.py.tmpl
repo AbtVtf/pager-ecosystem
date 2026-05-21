@@ -1,0 +1,36 @@
+"""{{.Name}} — a PagerOS location-aware starter (CLI-007 template: location).
+
+Demonstrates subscribing to the firmware ``location`` event so the
+device pushes a fresh GPS fix whenever it moves. Renders the current
+position; for a fuller breadcrumb tracker see ``examples/gps-tracker``.
+"""
+
+from pageros import App, Screen, Text
+
+app = App(name="{{.Name}}")
+
+
+@app.screen("/")
+def home(request):
+    loc = request.ctx.location
+    if loc is None:
+        return Screen(
+            id="scr_nofix",
+            title="{{.Name}}",
+            body=[Text(s="Waiting for GPS fix…", style="dim")],
+            subscribe=["location"],
+        )
+    return Screen(
+        id="scr_fix",
+        title="{{.Name}}",
+        body=[
+            Text(s=f"Lat: {loc.lat:.5f}", style="heading"),
+            Text(s=f"Lon: {loc.lon:.5f}", style="heading"),
+            Text(s=f"±{int(loc.accuracy or 0)} m", style="dim"),
+        ],
+        subscribe=["location"],
+    )
+
+
+if __name__ == "__main__":
+    app.run()

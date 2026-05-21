@@ -1,0 +1,54 @@
+"""{{.Name}} — a PagerOS form starter (CLI-007 template: form).
+
+Demonstrates the ``Form`` + ``Input`` widgets, a POST handler that reads
+the submitted body, and rendering a confirmation screen.
+"""
+
+from pageros import App, Form, Input, Notification, Screen, Text
+
+app = App(name="{{.Name}}")
+
+
+@app.screen("/")
+def home():
+    return Screen(
+        id="scr_home",
+        title="{{.Name}}",
+        body=[
+            Text(s="Send us a note:"),
+            Form(
+                action="/submit",
+                method="POST",
+                fields=[
+                    Input(name="subject", label="Subject", max=80),
+                    Input(name="body", label="Body", max=240),
+                ],
+                submit="Send",
+            ),
+        ],
+    )
+
+
+@app.handler("/submit", method="POST")
+def submit(request):
+    payload = request.body if isinstance(request.body, dict) else {}
+    subject = (payload.get("subject") or "").strip()
+    body = (payload.get("body") or "").strip()
+    if not subject:
+        return Screen(
+            id="scr_home", title="{{.Name}}",
+            body=[Notification(s="Subject is required.", level="warn"), Text(s="Try again.")],
+        )
+    # ... persist somewhere here ...
+    return Screen(
+        id="scr_thanks", title="{{.Name}}",
+        body=[
+            Notification(s="Saved.", level="info"),
+            Text(s=f"You wrote: {subject}", style="heading"),
+            Text(s=body or "(no body)", style="dim"),
+        ],
+    )
+
+
+if __name__ == "__main__":
+    app.run()
