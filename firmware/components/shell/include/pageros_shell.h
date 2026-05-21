@@ -40,6 +40,28 @@ esp_err_t pageros_shell_emit_home(uint8_t *buf, size_t cap, size_t *out_len);
 // Convenience: emit + apprt_open in one call.
 esp_err_t pageros_shell_mount_home(void);
 
+// Settings menu Frame: Wi-Fi · Add app by URL · About · Back. Items
+// have shell-internal hrefs ("shell:wifi", "shell:add-app", ...) the
+// input handler interprets to mount the corresponding sub-screen.
+esp_err_t pageros_shell_emit_settings(uint8_t *buf, size_t cap, size_t *out_len);
+
+// Wi-Fi config Frame: status line, SSID input, password input,
+// Connect button, Back button. `ssid` and `psk` populate the inputs'
+// `value` fields so the renderer can show what the user has typed
+// so far. `status` is a short string (e.g. "Connected" / "12 dBm" /
+// "Bad PSK") rendered as a `text` widget.
+esp_err_t pageros_shell_emit_wifi_config(uint8_t *buf, size_t cap, size_t *out_len,
+                                         const char *ssid,
+                                         const char *psk_masked,
+                                         const char *status);
+
+// Add-app-by-URL Frame: heading, URL input, Install button, Back,
+// plus an optional error/success message rendered as a notification.
+esp_err_t pageros_shell_emit_add_app(uint8_t *buf, size_t cap, size_t *out_len,
+                                     const char *url,
+                                     const char *message,
+                                     const char *message_level);  // "info"|"warn"|"error"|NULL
+
 #ifdef __cplusplus
 }
 #endif

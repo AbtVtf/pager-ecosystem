@@ -34,6 +34,7 @@
 #include "pageros_network.h"
 #include "pageros_power.h"
 #include "pageros_shell.h"
+#include "pageros_sideload.h"
 #include "pageros_storage.h"
 #include "pageros_widgets.h"
 #include "pageros_xl9555.h"
@@ -53,12 +54,48 @@ __attribute__((unused)) static const char *router_nav_name(pageros_router_nav_t 
 
 // --- Shell navigation state --------------------------------------- //
 //
-// Single foreground app at a time (SPEC §7.3); focus_widget_index +
-// focus_item_index together name what the user has highlighted in the
-// current Frame. The input router's shell handler mutates these on
-// encoder/nav events and then triggers a re-render.
+// The shell is itself a built-in app (SPEC §10.4 / FW-029). We track
+// which "page" of the shell is currently mounted, the focus cursor
+// for it, and the text buffers backing the input widgets on the
+// Wi-Fi and Add-app screens.
 
-static pageros_widgets_focus_t s_focus = { .widget_index = 0, .item_index = 0, .scroll = 0 };
+typedef enum {
+    SHELL_PAGE_HOME = 0,
+    SHELL_PAGE_SETTINGS,
+    SHELL_PAGE_WIFI,
+    SHELL_PAGE_ADD_APP,
+} shell_page_t;
+
+static struct {
+    shell_page_t page;
+    pageros_widgets_focus_t focus;
+
+    // Per-page state.
+    char ssid[33];           // Wi-Fi
+    char psk[65];
+    char wifi_status[48];
+
+    char url[160];           // Add app
+    char addapp_msg[80];
+    char addapp_msg_level[8];
+
+    // Which widget index in the current Frame is an `input` we should
+    // route key events into. -1 = no input focused (focus is on a list
+    // item or a button).
+    int  text_input_widget;
+
+    // Editable buffer for the currently focused input. Points to one
+    // of the per-page char arrays above (e.g. `ssid`).
+    char  *text_buf;
+    size_t text_cap;
+} s = {
+    .page  = SHELL_PAGE_HOME,
+    .focus = { .widget_index = 1, .item_index = 0, .scroll = 0 },
+    .text_input_widget = -1,
+};
+
+// Shorthand kept for legacy callers (back-compat with old field name).
+#define s_focus (s.focus)
 
 // Walk the foreground Frame's body looking up the widget at
 // `widget_index`; returns the focused item's `href` text (NUL-terminated)
@@ -141,6 +178,11 @@ static void render_foreground(void)
 {
     pageros_widgets_palette_t pal;
     pageros_widgets_default_palette(&pal);
+    const char *title = "PagerOS";
+    const char *help  = "MENU=up/dn  ENTER=open  BACK=back";
+    if (s.page == SHELL_PAGE_SETTINGS) title = "Settings";
+    if (s.page == SHELL_PAGE_WIFI)     { title = "Wi-Fi";    help = "Type SSID/PSK  ENTER=connect  BACK=erase"; }
+    if (s.page == SHELL_PAGE_ADD_APP)  { title = "Add app";  help = "Type URL  ENTER=install  BACK=erase"; }
     pageros_widgets_ctx_t ctx = {
         .canvas  = {
             .pixels = (uint16_t *)pageros_display_framebuffer(),
@@ -148,9 +190,9 @@ static void render_foreground(void)
             .h      = PAGEROS_DISPLAY_HEIGHT,
         },
         .palette = pal,
-        .focus   = s_focus,
-        .title   = "PagerOS",
-        .help    = "MENU = up/down  ENTER = open  BACK = back",
+        .focus   = s.focus,
+        .title   = title,
+        .help    = help,
     };
     const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
     if (!fr) return;
@@ -168,69 +210,374 @@ static void render_foreground(void)
     }
 }
 
+// --- QWERTY keymap (TCA8418 row/col → ASCII) ---------------------- //
+//
+// LILYGO T-LoRa Pager keyboard. The TCA8418 reports a 4x10 matrix.
+// This is our best-guess layout based on the printed keycaps; the
+// "shell key: row=X col=Y char='?'" log line on every press lets the
+// user correct the map if any key lands wrong. Unmapped cells return 0.
+
+static const char keymap_lower[4][10] = {
+    /* row 0 */ {'q','w','e','r','t','y','u','i','o','p'},
+    /* row 1 */ {'a','s','d','f','g','h','j','k','l',  0 },
+    /* row 2 */ {'z','x','c','v','b','n','m',',','.',  0 },
+    /* row 3 */ { 0 , 0 ,' ', 0 , 0 , 0 , 0 ,'/','-', 0 },
+};
+
+static char keymap_lookup(uint8_t row, uint8_t col)
+{
+    if (row >= 4 || col >= 10) return 0;
+    return keymap_lower[row][col];
+}
+
+// --- Per-screen mount + emit helpers ------------------------------- //
+
+// Mount the result of `emit` into apprt and re-render. The emit
+// function takes (buf, cap, &len) and writes a CBOR Frame.
+static void mount_and_render(esp_err_t (*emit)(uint8_t *, size_t, size_t *))
+{
+    uint8_t buf[768]; size_t n = 0;
+    if (emit(buf, sizeof(buf), &n) != ESP_OK) {
+        ESP_LOGW("shell", "emit failed");
+        return;
+    }
+    pageros_apprt_set_frame(buf, n);
+    render_foreground();
+}
+
+static void mount_home(void)
+{
+    s.page = SHELL_PAGE_HOME;
+    s.focus.widget_index = 1; s.focus.item_index = 0;
+    s.text_input_widget = -1; s.text_buf = NULL; s.text_cap = 0;
+    pageros_shell_mount_home();
+    render_foreground();
+}
+
+static void mount_settings(void)
+{
+    s.page = SHELL_PAGE_SETTINGS;
+    s.focus.widget_index = 1; s.focus.item_index = 0;
+    s.text_input_widget = -1; s.text_buf = NULL; s.text_cap = 0;
+    mount_and_render(pageros_shell_emit_settings);
+}
+
+static esp_err_t emit_wifi_thunk(uint8_t *b, size_t c, size_t *n)
+{
+    // Render the password as a row of dots so an over-the-shoulder
+    // look doesn't reveal it; the actual `s.psk` buffer keeps the
+    // plaintext for the eventual wifi_connect call.
+    char masked[sizeof(s.psk)];
+    size_t L = strlen(s.psk);
+    for (size_t i = 0; i < L && i + 1 < sizeof(masked); i++) masked[i] = '*';
+    masked[L < sizeof(masked) - 1 ? L : sizeof(masked) - 1] = '\0';
+    return pageros_shell_emit_wifi_config(b, c, n, s.ssid, masked, s.wifi_status);
+}
+
+static void mount_wifi(void)
+{
+    s.page = SHELL_PAGE_WIFI;
+    s.focus.widget_index = 2;       // first input (SSID) in the body
+    s.focus.item_index = 0;
+    s.text_input_widget = 2;
+    s.text_buf = s.ssid;
+    s.text_cap = sizeof(s.ssid);
+    // Pre-fill with saved creds if present.
+    pageros_wifi_creds_load(s.ssid, sizeof(s.ssid), s.psk, sizeof(s.psk));
+    if (pageros_wifi_is_connected()) {
+        strncpy(s.wifi_status, "Connected", sizeof(s.wifi_status));
+    } else if (s.wifi_status[0] == '\0') {
+        strncpy(s.wifi_status, "Disconnected", sizeof(s.wifi_status));
+    }
+    s.wifi_status[sizeof(s.wifi_status) - 1] = '\0';
+    mount_and_render(emit_wifi_thunk);
+}
+
+static esp_err_t emit_addapp_thunk(uint8_t *b, size_t c, size_t *n)
+{
+    return pageros_shell_emit_add_app(b, c, n, s.url,
+                                      s.addapp_msg[0] ? s.addapp_msg : NULL,
+                                      s.addapp_msg_level[0] ? s.addapp_msg_level : NULL);
+}
+
+static void mount_add_app(void)
+{
+    s.page = SHELL_PAGE_ADD_APP;
+    s.focus.widget_index = 3;       // URL input (heading=0, [notif?], hint, input, install, back)
+    if (s.addapp_msg[0]) s.focus.widget_index = 4;  // shift down if notif visible
+    s.focus.item_index = 0;
+    s.text_input_widget = s.focus.widget_index;
+    s.text_buf = s.url;
+    s.text_cap = sizeof(s.url);
+    mount_and_render(emit_addapp_thunk);
+}
+
+// Map an input/button widget index → which text buffer to edit, or -1
+// if the widget at that index isn't a text input on the current page.
+static void rebind_text_buf_for_focus(void)
+{
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    if (s.page == SHELL_PAGE_WIFI) {
+        if (s.focus.widget_index == 2) { s.text_input_widget = 2; s.text_buf = s.ssid; s.text_cap = sizeof(s.ssid); }
+        else if (s.focus.widget_index == 3) { s.text_input_widget = 3; s.text_buf = s.psk;  s.text_cap = sizeof(s.psk); }
+    } else if (s.page == SHELL_PAGE_ADD_APP) {
+        int url_idx = s.addapp_msg[0] ? 4 : 3;
+        if (s.focus.widget_index == url_idx) {
+            s.text_input_widget = url_idx; s.text_buf = s.url; s.text_cap = sizeof(s.url);
+        }
+    }
+}
+
+// --- Button action dispatcher ------------------------------------- //
+//
+// Called with a button's `href` when the user presses ENTER on it.
+
+static void wifi_connect_async(void)
+{
+    if (s.ssid[0] == '\0') {
+        strncpy(s.wifi_status, "SSID is empty", sizeof(s.wifi_status));
+        s.wifi_status[sizeof(s.wifi_status) - 1] = '\0';
+        return;
+    }
+    strncpy(s.wifi_status, "Connecting…", sizeof(s.wifi_status));
+    s.wifi_status[sizeof(s.wifi_status) - 1] = '\0';
+    esp_err_t r = pageros_wifi_connect(s.ssid, s.psk, 15000);
+    if (r == ESP_OK) {
+        strncpy(s.wifi_status, "Connected", sizeof(s.wifi_status));
+        pageros_wifi_creds_save(s.ssid, s.psk);
+    } else {
+        snprintf(s.wifi_status, sizeof(s.wifi_status), "Failed: %s",
+                 esp_err_to_name(r));
+    }
+}
+
+static void addapp_install(void)
+{
+    if (s.url[0] == '\0') {
+        strncpy(s.addapp_msg, "URL is empty", sizeof(s.addapp_msg));
+        strncpy(s.addapp_msg_level, "warn", sizeof(s.addapp_msg_level));
+        return;
+    }
+    if (!pageros_wifi_is_connected()) {
+        strncpy(s.addapp_msg, "Wi-Fi not connected", sizeof(s.addapp_msg));
+        strncpy(s.addapp_msg_level, "warn", sizeof(s.addapp_msg_level));
+        return;
+    }
+    char app_id[PAGEROS_SIDELOAD_MAX_APP_ID];
+    esp_err_t r = pageros_sideload_install_from_url(s.url, app_id, sizeof(app_id));
+    if (r == ESP_OK) {
+        // Truncate app_id to fit the notification line.
+        snprintf(s.addapp_msg, sizeof(s.addapp_msg), "Installed %.48s", app_id);
+        strncpy(s.addapp_msg_level, "info", sizeof(s.addapp_msg_level));
+    } else {
+        snprintf(s.addapp_msg, sizeof(s.addapp_msg), "Install failed: %s",
+                 esp_err_to_name(r));
+        strncpy(s.addapp_msg_level, "error", sizeof(s.addapp_msg_level));
+    }
+    s.addapp_msg_level[sizeof(s.addapp_msg_level) - 1] = '\0';
+}
+
+// Returns true if the href was recognised + acted on.
+static bool handle_button_href(const char *href)
+{
+    if (!href) return false;
+    if (strcmp(href, "shell:home") == 0)      { mount_home();     return true; }
+    if (strcmp(href, "shell:settings") == 0)  { mount_settings(); return true; }
+    if (strcmp(href, "shell:wifi") == 0)      { mount_wifi();     return true; }
+    if (strcmp(href, "shell:add-app") == 0)   { mount_add_app();  return true; }
+    if (strcmp(href, "shell:about") == 0) {
+        // Inline About — overload settings emitter for now; a real
+        // about screen lands in a later iteration.
+        strncpy(s.addapp_msg, "PagerOS pre-alpha · CC0", sizeof(s.addapp_msg));
+        strncpy(s.addapp_msg_level, "info", sizeof(s.addapp_msg_level));
+        return true;
+    }
+    if (strcmp(href, "shell:wifi-connect") == 0) {
+        wifi_connect_async();
+        mount_and_render(emit_wifi_thunk);
+        return true;
+    }
+    if (strcmp(href, "shell:install") == 0) {
+        addapp_install();
+        mount_and_render(emit_addapp_thunk);
+        return true;
+    }
+    if (strncmp(href, "open:", 5) == 0) {
+        ESP_LOGI("shell", "ENTER → open app %s (app launch TBD)", href + 5);
+        return true;
+    }
+    return false;
+}
+
 // Shell input handler — owns navigation between widgets and items in
 // the foreground Frame. Encoder = scroll within the focused widget;
 // ENTER = activate; BACK = apprt_back.
+// How many "focusable" widgets does the current page have, in render
+// order? Used to bound encoder navigation across inputs + buttons.
+//
+// HOME / SETTINGS / ABOUT — focus stays on the list widget (item navs).
+// WIFI — 4 stops: SSID input, password input, Connect button, Back button.
+// ADD_APP — 3 stops: URL input, Install button, Back button (+ shifted if notif visible).
+
+static void page_advance_focus(int step)
+{
+    int n_stops = 0;
+    int stops[8];
+
+    switch (s.page) {
+    case SHELL_PAGE_HOME:
+    case SHELL_PAGE_SETTINGS: {
+        // Single list widget; move item_index.
+        const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
+        int n = focused_list_len(fr, 1);
+        if (n > 0) {
+            s.focus.widget_index = 1;
+            s.focus.item_index = (s.focus.item_index + step + n) % n;
+        }
+        rebind_text_buf_for_focus();
+        return;
+    }
+    case SHELL_PAGE_WIFI:
+        // body order: heading(0), status(1), ssid(2), pwd(3), Connect(4), Back(5)
+        stops[n_stops++] = 2;
+        stops[n_stops++] = 3;
+        stops[n_stops++] = 4;
+        stops[n_stops++] = 5;
+        break;
+    case SHELL_PAGE_ADD_APP: {
+        // body order: heading(0), [notif?](1), hint, url, install, back
+        int notif = s.addapp_msg[0] ? 1 : 0;
+        stops[n_stops++] = 2 + notif;     // hint? actually input is after hint
+        // Correction: order is heading, [notif], hint, input, install, back.
+        // So indices: heading=0, notif=1?, hint=1or2, input=2or3, install=3or4, back=4or5.
+        n_stops = 0;
+        int base = 2 + notif;             // input
+        stops[n_stops++] = base;
+        stops[n_stops++] = base + 1;      // install
+        stops[n_stops++] = base + 2;      // back
+        break;
+    }
+    }
+    if (n_stops == 0) return;
+    // Find current index in the stops table; if not present, snap to 0.
+    int cur = 0;
+    for (int i = 0; i < n_stops; i++) if (stops[i] == s.focus.widget_index) { cur = i; break; }
+    cur = (cur + step + n_stops) % n_stops;
+    s.focus.widget_index = stops[cur];
+    s.focus.item_index = 0;
+    rebind_text_buf_for_focus();
+}
+
 static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
 {
     (void)ctx;
-    // Any user input bumps the device back to ACTIVE (full backlight,
-    // fresh inactivity timer). Cheap call — safe to do on every event.
     pageros_power_kick();
     const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
     bool dirty = false;
 
     switch (ev->kind) {
-        case PAGEROS_ROUTER_EVT_ENCODER: {
-            // For the v0 Home Frame the second widget is the app list
-            // (index 1 — index 0 is the heading). Keep focus pinned
-            // there and move the item cursor.
-            s_focus.widget_index = 1;
-            int n = focused_list_len(fr, 1);
-            if (n <= 0) break;
-            int step = (ev->as.enc == PAGEROS_ROUTER_ENC_CW) ? +1 : -1;
-            s_focus.item_index = (s_focus.item_index + step + n) % n;
-            dirty = true;
-            break;
-        }
-        case PAGEROS_ROUTER_EVT_NAV:
-            if (ev->as.nav == PAGEROS_ROUTER_NAV_ENTER) {
-                char buf[96];
-                const char *href = focused_href(fr, s_focus.widget_index,
-                                                s_focus.item_index, buf, sizeof(buf));
-                if (href) {
-                    ESP_LOGI("shell", "ENTER → href=%s", href);
-                    // For shell-internal hrefs ("open:<app>") we'd
-                    // launch the named app once apps are installed;
-                    // for now log + stay on home.
-                } else {
-                    ESP_LOGI("shell", "ENTER (no href)");
+    case PAGEROS_ROUTER_EVT_ENCODER: {
+        int step = (ev->as.enc == PAGEROS_ROUTER_ENC_CW) ? +1 : -1;
+        page_advance_focus(step);
+        dirty = true;
+        break;
+    }
+    case PAGEROS_ROUTER_EVT_NAV:
+        if (ev->as.nav == PAGEROS_ROUTER_NAV_ENTER) {
+            char href_buf[96];
+            const char *href = focused_href(fr, s.focus.widget_index,
+                                            s.focus.item_index, href_buf, sizeof(href_buf));
+            // Buttons live as standalone widgets in the body — their
+            // href is on the widget itself, not inside a list. Fall
+            // back to scanning the widget directly for an "href" field
+            // when focused_href() (list-item lookup) misses.
+            if (!href && fr && fr->kind == PGR_CBOR_KIND_MAP) {
+                const pgr_cbor_value_t *body = NULL;
+                for (size_t i = 0; i < fr->v.map.len; i++) {
+                    const pgr_cbor_pair_t *p = &fr->v.map.items[i];
+                    if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+                        p->key.v.bytes.len == 4 &&
+                        memcmp(p->key.v.bytes.data, "body", 4) == 0) { body = &p->val; break; }
                 }
-                dirty = true;
-            } else if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK ||
-                       ev->as.nav == PAGEROS_ROUTER_NAV_BACK_LONG) {
-                const char *prev = pageros_apprt_back();
-                ESP_LOGI("shell", "BACK → %s", prev ? prev : "(idle)");
-                // Always remount Shell home so something stays on
-                // screen even at the back of the recents stack.
-                pageros_shell_mount_home();
-                s_focus.widget_index = 1;
-                s_focus.item_index = 0;
+                if (body && body->kind == PGR_CBOR_KIND_ARRAY &&
+                    s.focus.widget_index >= 0 &&
+                    s.focus.widget_index < (int)body->v.arr.len) {
+                    const pgr_cbor_value_t *w = &body->v.arr.items[s.focus.widget_index];
+                    if (w->kind == PGR_CBOR_KIND_MAP) {
+                        for (size_t i = 0; i < w->v.map.len; i++) {
+                            const pgr_cbor_pair_t *p = &w->v.map.items[i];
+                            if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+                                p->key.v.bytes.len == 4 &&
+                                memcmp(p->key.v.bytes.data, "href", 4) == 0 &&
+                                p->val.kind == PGR_CBOR_KIND_TEXT) {
+                                size_t l = p->val.v.bytes.len;
+                                if (l >= sizeof(href_buf)) l = sizeof(href_buf) - 1;
+                                memcpy(href_buf, p->val.v.bytes.data, l);
+                                href_buf[l] = '\0';
+                                href = href_buf;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (href) {
+                ESP_LOGI("shell", "ENTER → %s", href);
+                handle_button_href(href);
                 dirty = true;
             }
-            break;
-        case PAGEROS_ROUTER_EVT_KEY:
-            // Map specific keys later (search, type-ahead). For now
-            // just log so we can confirm the matrix is alive.
-            ESP_LOGD("shell", "key row=%u col=%u %s",
-                     ev->as.key.row, ev->as.key.col,
-                     ev->as.key.pressed ? "DOWN" : "UP");
-            return true;
-        default:
-            return false;
+        } else if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK_LONG) {
+            // Long press: always go back to Home regardless of state.
+            mount_home();
+            dirty = true;
+        } else if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK) {
+            // Short press: if a text input has focus, treat as
+            // backspace; otherwise navigate one screen back.
+            if (s.text_input_widget == s.focus.widget_index && s.text_buf) {
+                size_t L = strlen(s.text_buf);
+                if (L > 0) { s.text_buf[L - 1] = '\0'; dirty = true; }
+            } else {
+                switch (s.page) {
+                case SHELL_PAGE_SETTINGS: mount_home();     dirty = true; break;
+                case SHELL_PAGE_WIFI:
+                case SHELL_PAGE_ADD_APP:  mount_settings(); dirty = true; break;
+                case SHELL_PAGE_HOME:     break;
+                }
+            }
+        }
+        break;
+    case PAGEROS_ROUTER_EVT_KEY: {
+        if (!ev->as.key.pressed) return true;  // act on press, ignore release
+        char c = keymap_lookup(ev->as.key.row, ev->as.key.col);
+        ESP_LOGI("shell", "key r=%u c=%u %s ch='%c'(0x%02x)",
+                 ev->as.key.row, ev->as.key.col,
+                 ev->as.key.pressed ? "DN" : "UP",
+                 (c >= 0x20 && c < 0x7f) ? c : '?', (unsigned)c);
+        if (c == 0 || !s.text_buf) return true;
+        size_t L = strlen(s.text_buf);
+        if (L + 1 < s.text_cap) {
+            s.text_buf[L] = c;
+            s.text_buf[L + 1] = '\0';
+            dirty = true;
+        }
+        return true;
+    }
+    default:
+        return false;
     }
 
-    if (dirty) render_foreground();
+    if (dirty) {
+        // Re-emit the current page so input widgets pick up the new
+        // buffer contents (focus + text), then push to the display.
+        switch (s.page) {
+        case SHELL_PAGE_HOME:     /* home content doesn't change with focus */ break;
+        case SHELL_PAGE_SETTINGS: /* same */ break;
+        case SHELL_PAGE_WIFI:     mount_and_render(emit_wifi_thunk); return true;
+        case SHELL_PAGE_ADD_APP:  mount_and_render(emit_addapp_thunk); return true;
+        }
+        render_foreground();
+    }
     return true;
 }
 
@@ -382,6 +729,19 @@ void app_main(void)
     esp_err_t wifi_err = pageros_wifi_init();
     if (wifi_err != ESP_OK) {
         ESP_LOGW(TAG, "wifi init failed: %s", esp_err_to_name(wifi_err));
+    } else {
+        // Auto-connect on boot if Settings → Wi-Fi has saved creds.
+        char saved_ssid[33] = {0}, saved_psk[65] = {0};
+        if (pageros_wifi_creds_load(saved_ssid, sizeof(saved_ssid),
+                                    saved_psk, sizeof(saved_psk)) == ESP_OK
+                && saved_ssid[0]) {
+            ESP_LOGI(TAG, "Wi-Fi auto-connect to '%s'", saved_ssid);
+            esp_err_t wc = pageros_wifi_connect(saved_ssid, saved_psk, 15000);
+            if (wc != ESP_OK) {
+                ESP_LOGW(TAG, "auto-connect failed: %s — Settings → Wi-Fi to fix",
+                         esp_err_to_name(wc));
+            }
+        }
     }
 
     // Display bring-up (FW-005).

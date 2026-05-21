@@ -45,6 +45,14 @@ bool pageros_wifi_is_connected(void);
 // Disconnect + stop the radio. Safe to call when not connected.
 esp_err_t pageros_wifi_disconnect(void);
 
+// Persisted Wi-Fi credentials (NVS namespace "wifi_creds"). Used by
+// the Settings screen for save-and-autoconnect, and by app_main() at
+// boot to auto-connect when something is stored.
+esp_err_t pageros_wifi_creds_save(const char *ssid, const char *psk);
+esp_err_t pageros_wifi_creds_load(char *ssid, size_t ssid_cap,
+                                  char *psk,  size_t psk_cap);
+esp_err_t pageros_wifi_creds_clear(void);
+
 // -- HTTPS client ----------------------------------------------------------
 
 typedef struct {

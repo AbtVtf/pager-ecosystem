@@ -7,6 +7,7 @@ idf_component_register(
     SRCS
         "src/network.c"
         "src/url.c"
+        "src/wifi_creds.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES esp_wifi esp_event esp_netif esp_http_client esp-tls mbedtls

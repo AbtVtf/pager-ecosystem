@@ -18,6 +18,7 @@ idf_component_register(
         shell
         widgets
         fonts
+        sideload
         cbor_codec
         i2c_bus
         xl9555
