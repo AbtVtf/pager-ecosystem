@@ -42,6 +42,7 @@ from urllib.parse import parse_qs, urlsplit
 from nacl.signing import SigningKey
 
 from pageros.codec import CborDecodeError, decode_frame, encode_frame
+from pageros.ctx import Ctx
 from pageros.encryption import AppKeypair
 from pageros.lora_budget import check_frame_size
 from pageros.push import (
@@ -51,6 +52,7 @@ from pageros.push import (
     PushResult,
     send_push,
 )
+from pageros.signing import ENVIRON_DEVICE_ID
 
 __all__ = ["App", "Request", "Response"]
 
@@ -80,6 +82,12 @@ class Request:
     requests; ``None`` for empty bodies; raw ``bytes`` when the body is
     present but the content type is not CBOR. ``query`` is a flat
     ``{key: [values]}`` dict from :func:`urllib.parse.parse_qs`.
+
+    ``ctx`` is the per-request :class:`pageros.Ctx` (SPEC §8.3). The
+    dispatcher always populates it — handlers that prefer the
+    SPEC-style ``def handler(ctx): ...`` signature can read
+    ``request.ctx`` for the same data without subscribing to the full
+    ``Request`` envelope.
     """
 
     method: str
@@ -87,6 +95,7 @@ class Request:
     query: dict[str, list[str]]
     headers: Mapping[str, str]
     body: Any
+    ctx: Ctx = field(default_factory=Ctx)
 
 
 @dataclass(frozen=True)
@@ -201,12 +210,20 @@ class App:
         *,
         body: bytes | None = None,
         headers: Mapping[str, str] | None = None,
+        verified_device_id: bytes | None = None,
+        session: dict[str, Any] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
         """Pure dispatch — no sockets, no threads.
 
         Returns ``(status, headers, body_bytes)``. The HTTP server uses
         this internally; tests should drive routes through this entry
         point instead of standing up a real server.
+
+        ``verified_device_id`` and ``session`` flow straight into the
+        :class:`Ctx` attached to the dispatched :class:`Request`. When
+        the SDK is fronted by :class:`pageros.SignatureVerifierMiddleware`
+        the HTTP wrapper forwards the verified pubkey here so handlers
+        always see an authenticated ``ctx.device_id``.
         """
         method_norm = method.upper()
         url = urlsplit(path)
@@ -236,12 +253,18 @@ class App:
         if body_decode_error is not None:
             return self._error_response(400, body_decode_error)
 
+        ctx = Ctx.from_headers(
+            header_map,
+            verified_device_id=verified_device_id,
+            session=session,
+        )
         request = Request(
             method=method_norm,
             path=route_path,
             query=query,
             headers=header_map,
             body=decoded_body,
+            ctx=ctx,
         )
 
         try:
