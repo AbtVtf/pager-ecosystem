@@ -14,6 +14,11 @@ idf_component_register(
         network
         display
         imu
+        apprt
+        shell
+        widgets
+        fonts
+        cbor_codec
         nvs_flash
         app_update
         esp_hw_support

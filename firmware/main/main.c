@@ -6,6 +6,7 @@
 // first per SPEC.md §7.2 boot flow.
 
 #include <stdio.h>
+#include <string.h>
 
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -17,7 +18,10 @@
 
 #include "nvs_flash.h"
 
+#include "pageros_apprt.h"
+#include "pageros_cbor.h"
 #include "pageros_display.h"
+#include "pageros_fonts.h"
 #include "pageros_gps.h"
 #include "pageros_identity.h"
 #include "pageros_imu.h"
@@ -27,7 +31,9 @@
 #include "pageros_logger.h"
 #include "pageros_lora.h"
 #include "pageros_network.h"
+#include "pageros_shell.h"
 #include "pageros_storage.h"
+#include "pageros_widgets.h"
 #include "selftest.h"
 
 static const char *TAG = "pageros";
@@ -180,21 +186,67 @@ void app_main(void)
         ESP_LOGW(TAG, "wifi init failed: %s", esp_err_to_name(wifi_err));
     }
 
-    // Display bring-up (FW-005). Shows a boot splash gradient so the
-    // user sees the panel come alive; the shell (FW-024+ + the
-    // renderer) takes over the framebuffer once it starts.
+    // Display bring-up (FW-005).
     esp_err_t disp_err = pageros_display_init();
     if (disp_err == ESP_OK) {
-        // SPEC §7.2 step 6 calls for the shell to render the home
-        // screen from a cached Frame; until that lands, a deep-purple
-        // → black vertical gradient is a calm placeholder that also
-        // exercises the present() path end-to-end so a missing-panel
-        // failure shows up at boot rather than at first app open.
-        pageros_display_gradient(pageros_display_rgb565(0x1a, 0x0a, 0x3a),
-                                 pageros_display_rgb565(0x00, 0x00, 0x00));
+        // Paint a solid background first so the panel is fully cleared
+        // before the renderer takes over — otherwise stale PSRAM bytes
+        // bleed through any region the renderer doesn't touch.
+        pageros_display_fill(pageros_display_rgb565(0x00, 0x00, 0x00));
         pageros_display_present();
     } else {
         ESP_LOGW(TAG, "display init failed: %s", esp_err_to_name(disp_err));
+    }
+
+    // FW-019 / FW-020 / FW-028 / FW-029 — render the Shell home Frame
+    // into the display's framebuffer and present. This replaces the
+    // boot-splash gradient with the actual home screen so the user sees
+    // something legible at first boot.
+    pageros_fonts_init(NULL);
+    pageros_apprt_init(NULL);
+    pageros_shell_init();
+    if (disp_err == ESP_OK) {
+        if (pageros_shell_mount_home() == ESP_OK) {
+            pageros_widgets_palette_t pal;
+            pageros_widgets_default_palette(&pal);
+            pageros_widgets_ctx_t ctx = {
+                .canvas  = {
+                    .pixels = (uint16_t *)pageros_display_framebuffer(),
+                    .w      = PAGEROS_DISPLAY_WIDTH,
+                    .h      = PAGEROS_DISPLAY_HEIGHT,
+                },
+                .palette = pal,
+                .focus   = { .widget_index = 0, .item_index = 0, .scroll = 0 },
+                .title   = "PagerOS",
+                .help    = "MENU = up/down  ENTER = open",
+            };
+            const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
+            if (fr) {
+                const pgr_cbor_value_t *body = NULL;
+                // Pull the "body" array out of the Frame map.
+                if (fr->kind == PGR_CBOR_KIND_MAP) {
+                    for (size_t i = 0; i < fr->v.map.len; i++) {
+                        const pgr_cbor_pair_t *p = &fr->v.map.items[i];
+                        if (p->key.kind == PGR_CBOR_KIND_TEXT &&
+                            p->key.v.bytes.len == 4 &&
+                            memcmp(p->key.v.bytes.data, "body", 4) == 0) {
+                            body = &p->val;
+                            break;
+                        }
+                    }
+                }
+                if (pageros_widgets_render_screen(&ctx, body) == ESP_OK) {
+                    pageros_display_present();
+                    ESP_LOGI(TAG, "rendered Shell home Frame to display");
+                } else {
+                    ESP_LOGW(TAG, "Shell render failed");
+                }
+            } else {
+                ESP_LOGW(TAG, "Shell mounted but no foreground frame");
+            }
+        } else {
+            ESP_LOGW(TAG, "Shell mount_home failed");
+        }
     }
 
     // GPS bring-up (FW-011). Soft-fails: if the receiver isn't present
