@@ -13,11 +13,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 
 	"github.com/pageros/pager-ecosystem/exit-node/internal/config"
 	"github.com/pageros/pager-ecosystem/exit-node/internal/lora"
+	"github.com/pageros/pager-ecosystem/exit-node/internal/stats"
 )
 
 const version = "0.1.0-dev"
@@ -64,10 +66,42 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// Counter source for the stats publisher. The RX/TX loop is not
+	// wired into main yet (will land with EXIT-003 follow-up), so for
+	// now publish an always-zero snapshot. The publisher still proves
+	// the opt-in dashboard path is healthy and dashboards see the node
+	// is alive (uptime increments).
+	source := stats.SourceFunc(func() stats.LoopSnapshot { return stats.LoopSnapshot{} })
+
+	var wg sync.WaitGroup
+
+	if cfg.Stats.Enabled {
+		pub, err := stats.NewPublisher(stats.Config{
+			Enabled:  true,
+			URL:      cfg.Stats.URL,
+			NodeName: cfg.NodeName,
+			Source:   source,
+		})
+		if err != nil {
+			log.Fatalf("stats: %v", err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := pub.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("stats: publisher exited: %v", err)
+			}
+		}()
+		fmt.Printf("  stats: publishing to %s\n", cfg.Stats.URL)
+	}
+
 	if cfg.Advertise.Enabled {
 		if err := runAdvertise(ctx, cfg.Advertise, dev); err != nil && !errors.Is(err, context.Canceled) {
+			cancel()
+			wg.Wait()
 			log.Fatalf("advertise: %v", err)
 		}
+		wg.Wait()
 		return
 	}
 
@@ -76,6 +110,7 @@ func main() {
 	// process during early integration.
 	fmt.Fprintln(os.Stderr, "advertise: disabled; idling until signal (no RX/TX loop yet)")
 	<-ctx.Done()
+	wg.Wait()
 }
 
 // runAdvertise builds the LORA-005 Advertiser from config and runs it
