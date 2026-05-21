@@ -64,8 +64,10 @@ func main() {
 			os.Exit(1)
 		}
 	case "link":
-		fmt.Fprintf(os.Stderr, "pagerctl: %q is not implemented yet\n", os.Args[1])
-		os.Exit(1)
+		if err := runLink(context.Background(), os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "pagerctl link: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "pagerctl: unknown command %q\n", os.Args[1])
 		fmt.Fprint(os.Stderr, usage)

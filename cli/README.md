@@ -77,6 +77,57 @@ Flags:
 
 Requires `esptool` (v4.6+) or `esptool.py` on `PATH` (`pipx install esptool`).
 
+## Pair a real device to the dev server (CLI-006)
+
+```sh
+pagerctl link --ssid HomeWifi --pwd hunter2
+pagerctl link --ssid HomeWifi --url http://10.0.0.5:8000/
+PAGEROS_WIFI_SSID=HomeWifi PAGEROS_WIFI_PWD=hunter2 pagerctl link
+```
+
+The `link` command provisions a USB-connected PagerOS device with the Wi-Fi
+credentials and dev server URL it needs to start pulling Frames from the host
+machine. After provisioning the device reboots and reconnects; combined with
+`pagerctl dev`'s live reload (PY-009), edits to `app.py` show up on real
+hardware within ~1 s.
+
+Flags:
+
+- `--port <path>` — bypass auto-detect (same VID/PID rules as `pagerctl flash`).
+- `--baud <n>` — console baud rate (default `115200`). Ignored by ESP32-S3's
+  native USB-Serial-JTAG but honoured by external CP210x / CH340 bridges.
+- `--ssid <name>` — Wi-Fi SSID the device should join (required, or set
+  `$PAGEROS_WIFI_SSID`).
+- `--pwd <pwd>` — Wi-Fi password (default `$PAGEROS_WIFI_PWD`; empty = open
+  network).
+- `--dev-host <host>` — dev server host as the device sees it. Defaults to the
+  host's first non-loopback IPv4 address; loopback inputs (`127.0.0.1`,
+  `localhost`, `::1`) are always rewritten because devices on the other side
+  of a USB-tethered Wi-Fi link cannot reach loopback.
+- `--dev-port <n>` — dev server port (default `8000`, matches `pagerctl dev`).
+- `--url <url>` — explicit URL, bypasses `--dev-host`/`--dev-port` (useful
+  when fronting `pagerctl dev` with an ngrok-style tunnel).
+- `--no-reboot` — provision but skip the post-flight reboot.
+
+### Wire protocol
+
+The CLI speaks a tiny line-based JSON protocol over the device's USB-CDC
+console at 115200 baud, 8N1. One JSON object per line in each direction:
+
+| Request                                            | Response                                                  |
+| -------------------------------------------------- | --------------------------------------------------------- |
+| `{"cmd":"ping"}`                                   | `{"ok":true,"version":"<fw>","id":"<device-fingerprint>"}` |
+| `{"cmd":"set-wifi","ssid":"...","pwd":"..."}`      | `{"ok":true}`                                             |
+| `{"cmd":"set-dev-server","url":"http://.../"}`     | `{"ok":true}`                                             |
+| `{"cmd":"reboot"}`                                 | `{"ok":true}` (or silence — device may reset first)       |
+
+On any failure the device replies `{"ok":false,"error":"<message>"}` and the
+CLI surfaces the message verbatim. The protocol is human-pasteable so the
+same flow is debuggable from `screen /dev/ttyACM0 115200`. The firmware-side
+implementation is a small `esp_console` command set wrapping NVS + the
+`pageros_wifi` API (FW-009); see `cli/internal/link/protocol.go` for the
+canonical schema.
+
 ## Install
 
 | Platform           | Command                                                                                                  |
