@@ -6,6 +6,7 @@ idf_component_register(
         gps
         input
         keyboard
+        input_router
         app_update
         esp_hw_support
         spi_flash

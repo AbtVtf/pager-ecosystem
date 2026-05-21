@@ -17,45 +17,44 @@
 
 #include "pageros_gps.h"
 #include "pageros_input.h"
+#include "pageros_input_router.h"
 #include "pageros_keyboard.h"
 #include "selftest.h"
 
 static const char *TAG = "pageros";
 
-static void kbd_log_task(void *arg)
+static const char *router_nav_name(pageros_router_nav_t n)
 {
-    (void)arg;
-    QueueHandle_t q = pageros_kbd_queue();
-    if (!q) vTaskDelete(NULL);
-    while (1) {
-        pageros_kbd_event_t e;
-        if (xQueueReceive(q, &e, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGI("kbd", "event: row=%u col=%u %s",
-                     e.row, e.col, e.pressed ? "DOWN" : "UP");
-        }
+    switch (n) {
+        case PAGEROS_ROUTER_NAV_ENTER:     return "ENTER";
+        case PAGEROS_ROUTER_NAV_BACK:      return "BACK";
+        case PAGEROS_ROUTER_NAV_BACK_LONG: return "BACK_LONG";
+        default:                           return "?";
     }
 }
 
-static const char *input_event_name(pageros_input_event_t e)
+// Default shell handler: accept and log everything the focused widget
+// declines. Until the real Shell (PagerOS UI DSL renderer) lands this
+// stands in as the "app shell" referenced by the FW-024 acceptance — it
+// proves the bubble-up path end-to-end on the device.
+static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
 {
-    switch (e) {
-        case PAGEROS_INPUT_ROTARY_CW:  return "ROTARY_CW";
-        case PAGEROS_INPUT_ROTARY_CCW: return "ROTARY_CCW";
-        case PAGEROS_INPUT_ENTER:      return "ENTER";
-        case PAGEROS_INPUT_BACK:       return "BACK";
-        case PAGEROS_INPUT_BACK_LONG:  return "BACK_LONG";
-        default:                       return "?";
-    }
-}
-
-static void input_log_task(void *arg)
-{
-    (void)arg;
-    while (1) {
-        pageros_input_event_t e = pageros_input_wait(portMAX_DELAY);
-        if (e != PAGEROS_INPUT_NONE) {
-            ESP_LOGI("input", "event: %s", input_event_name(e));
-        }
+    (void)ctx;
+    switch (ev->kind) {
+        case PAGEROS_ROUTER_EVT_ENCODER:
+            ESP_LOGI("shell", "encoder %s",
+                     ev->as.enc == PAGEROS_ROUTER_ENC_CW ? "CW" : "CCW");
+            return true;
+        case PAGEROS_ROUTER_EVT_NAV:
+            ESP_LOGI("shell", "nav %s", router_nav_name(ev->as.nav));
+            return true;
+        case PAGEROS_ROUTER_EVT_KEY:
+            ESP_LOGI("shell", "key row=%u col=%u %s",
+                     ev->as.key.row, ev->as.key.col,
+                     ev->as.key.pressed ? "DOWN" : "UP");
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -105,24 +104,30 @@ void app_main(void)
         ESP_LOGW(TAG, "GPS init skipped: %s", esp_err_to_name(gps_err));
     }
 
-    // Input bring-up (FW-007). Spawns a tiny logger task so the user can
-    // see encoder + ENTER + BACK events on the USB monitor; the real
-    // input router (FW-024) will replace this with proper dispatch.
+    // Input bring-up (FW-007 encoder + ENTER/BACK).
     esp_err_t input_err = pageros_input_init();
-    if (input_err == ESP_OK) {
-        xTaskCreate(input_log_task, "input_log", 2048, NULL, 4, NULL);
-    } else {
+    if (input_err != ESP_OK) {
         ESP_LOGW(TAG, "input init skipped: %s", esp_err_to_name(input_err));
     }
 
-    // Keyboard bring-up (FW-006). Same shape as input: log raw matrix
-    // events so the operator can see key presses on the USB monitor.
-    // Keymap translation lives at the shell layer.
+    // Keyboard bring-up (FW-006). Keymap translation lives at the
+    // shell/widget layer; the driver only emits raw (row,col) events.
     esp_err_t kbd_err = pageros_kbd_init();
-    if (kbd_err == ESP_OK) {
-        xTaskCreate(kbd_log_task, "kbd_log", 2048, NULL, 4, NULL);
-    } else {
+    if (kbd_err != ESP_OK) {
         ESP_LOGW(TAG, "kbd init skipped: %s", esp_err_to_name(kbd_err));
+    }
+
+    // Input router (FW-024): joins both driver queues into one dispatcher
+    // and routes events to the focused widget, falling back to the app
+    // shell on bubble. Until a real foreground app installs a focus
+    // handler, every event flows to `default_shell_handler` directly.
+    if (input_err == ESP_OK || kbd_err == ESP_OK) {
+        esp_err_t r = pageros_router_init();
+        if (r == ESP_OK) {
+            pageros_router_set_shell_handler(default_shell_handler, NULL);
+        } else {
+            ESP_LOGW(TAG, "router init skipped: %s", esp_err_to_name(r));
+        }
     }
 
     while (1) {
