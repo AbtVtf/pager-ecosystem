@@ -16,6 +16,7 @@
 pub mod direct;
 pub mod input;
 pub mod network_log;
+pub mod proxy;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ use serde::Serialize;
 use crate::direct::{DirectClient, DirectState, HttpMethod, Request as DirectRequest};
 use crate::input::{map_host_key, HostKey, InputEvent};
 use crate::network_log::{pretty_print_cbor, Exchange, NetworkLog};
+use crate::proxy::{ProxyConfig, ProxyController, ProxyOutcome};
 
 #[derive(Serialize)]
 pub struct RenderResult {
@@ -254,6 +256,11 @@ pub struct DirectRenderResult {
     /// Snapshot of navigation state after the request — frontend uses
     /// this to keep its address bar in sync without a second round trip.
     pub state: DirectState,
+    /// Proxy simulation outcome (SIM-006). `None` when proxy mode is
+    /// disabled — the frontend then knows to show the plain direct-mode
+    /// status line; `Some(_)` carries fragment + simulated-latency
+    /// metadata for the status bar and (eventually) the network panel.
+    pub proxy: Option<ProxyOutcome>,
 }
 
 /// Set / replace the direct-mode base URL. Clears history because a base
@@ -274,15 +281,24 @@ fn direct_state(client: tauri::State<'_, Arc<DirectClient>>) -> DirectState {
 
 /// Fetch `path` (GET or POST), render the response, return everything
 /// the frontend needs to draw the screen + update the address bar.
+///
+/// Proxy mode (SIM-006): after the underlying HTTP fetch lands, the
+/// proxy controller is consulted with the actual request / response
+/// sizes; if enabled, the simulator sleeps for the simulated airtime
+/// before returning so the engineer feels the configured latency / loss
+/// envelope on top of an otherwise normal direct-mode exchange.
 #[tauri::command]
 async fn direct_fetch(
     path: String,
     method: Option<HttpMethod>,
     body: Option<Vec<u8>>,
     client: tauri::State<'_, Arc<DirectClient>>,
+    proxy: tauri::State<'_, Arc<ProxyController>>,
 ) -> Result<DirectRenderResult, String> {
     let client = (*client).clone();
+    let proxy = (*proxy).clone();
     let method = method.unwrap_or(HttpMethod::Get);
+    let request_bytes = body.as_deref().map(|b| b.len()).unwrap_or(0);
     let response = client
         .fetch(DirectRequest {
             method,
@@ -291,6 +307,7 @@ async fn direct_fetch(
         })
         .await
         .map_err(|e| e.to_string())?;
+    let proxy_outcome = apply_proxy_simulation(&proxy, request_bytes, response.body.len()).await;
     Ok(DirectRenderResult {
         render: render_to_result(response.resolved_url.clone(), &response.body),
         status: response.status,
@@ -298,7 +315,44 @@ async fn direct_fetch(
         url: response.resolved_url,
         content_type: response.content_type,
         state: client.state(),
+        proxy: proxy_outcome,
     })
+}
+
+/// Consult the proxy controller and sleep for the simulated airtime,
+/// if proxy mode is on. Lives here (not on the client) so the network
+/// log still records a single underlying HTTP exchange — the simulated
+/// LoRa shape rides on top.
+async fn apply_proxy_simulation(
+    proxy: &ProxyController,
+    request_bytes: usize,
+    response_bytes: usize,
+) -> Option<ProxyOutcome> {
+    let outcome = proxy.sample(request_bytes, response_bytes)?;
+    if outcome.simulated_latency_ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(outcome.simulated_latency_ms))
+            .await;
+    }
+    Some(outcome)
+}
+
+/// Replace the live proxy config. Submitted values are clamped to the
+/// advertised slider ranges (`SPEC.md`-pinned 0–30 s latency, 0–50 %
+/// loss); the clamped config is returned so the frontend can reconcile
+/// without a second read.
+#[tauri::command]
+fn proxy_set_config(
+    config: ProxyConfig,
+    proxy: tauri::State<'_, Arc<ProxyController>>,
+) -> ProxyConfig {
+    proxy.set_config(config)
+}
+
+/// Current proxy config. Used by the frontend on boot to populate
+/// slider state.
+#[tauri::command]
+fn proxy_state(proxy: tauri::State<'_, Arc<ProxyController>>) -> ProxyConfig {
+    proxy.config()
 }
 
 /// Network-panel detail view. Mirrors a single captured exchange and
@@ -394,13 +448,23 @@ fn read_startup_url() -> Option<String> {
 /// Navigate one entry back in the direct-mode history stack. Returns
 /// `None` if history is empty so the frontend can decide whether to
 /// route to the Shell (per `SPEC.md` §5.6.2: BACK from app root → Shell).
+///
+/// BACK is also subject to the proxy mode envelope — re-fetching a
+/// previous page over a flaky simulated link should feel just as flaky
+/// as the original navigation did.
 #[tauri::command]
 async fn direct_back(
     client: tauri::State<'_, Arc<DirectClient>>,
+    proxy: tauri::State<'_, Arc<ProxyController>>,
 ) -> Result<Option<DirectRenderResult>, String> {
     let client = (*client).clone();
+    let proxy = (*proxy).clone();
     let response = client.back().await.map_err(|e| e.to_string())?;
     let Some(response) = response else { return Ok(None) };
+    // BACK has no request body (it's a refetch GET), so `request_bytes`
+    // is 0 — the empty-fragment minimum in `fragment_count` still
+    // charges one airtime unit for the request leg.
+    let proxy_outcome = apply_proxy_simulation(&proxy, 0, response.body.len()).await;
     Ok(Some(DirectRenderResult {
         render: render_to_result(response.resolved_url.clone(), &response.body),
         status: response.status,
@@ -408,17 +472,20 @@ async fn direct_back(
         url: response.resolved_url,
         content_type: response.content_type,
         state: client.state(),
+        proxy: proxy_outcome,
     }))
 }
 
 pub fn run() {
     let network_log = Arc::new(NetworkLog::new());
     let direct_client = Arc::new(DirectClient::with_log(Some(network_log.clone())));
+    let proxy_controller = Arc::new(ProxyController::new());
     let startup = StartupUrl(read_startup_url());
     tauri::Builder::default()
         .manage(Mutex::new(InputState::default()))
         .manage(direct_client)
         .manage(network_log)
+        .manage(proxy_controller)
         .manage(startup)
         .invoke_handler(tauri::generate_handler![
             render_vector,
@@ -434,6 +501,8 @@ pub fn run() {
             network_exchange,
             network_clear,
             startup_url,
+            proxy_set_config,
+            proxy_state,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

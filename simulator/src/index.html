@@ -231,6 +231,71 @@
         color: #ffc870;
         font-style: italic;
       }
+
+      /* SIM-006 — Proxy panel (Alt+L). A small overlay docked top-right
+         that hosts the latency / loss sliders + a mode toggle. Sliders
+         use the browser's native `range` input so engineers get exact
+         numeric feedback without the panel growing complex; the values
+         stream straight to the backend via `proxy_set_config`. */
+      #proxypanel {
+        position: absolute;
+        top: 0;
+        right: 0;
+        display: none;
+        flex-direction: column;
+        gap: 2px;
+        padding: 3px 4px;
+        background: rgba(0, 0, 0, 0.92);
+        border-left: 1px solid #333;
+        border-bottom: 1px solid #333;
+        font-size: 10px;
+        color: #d0d0d0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        z-index: 15;
+        min-width: 220px;
+      }
+      #proxypanel.open { display: flex; }
+      #proxypanel .row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      #proxypanel .row label {
+        flex: 0 0 64px;
+        color: #8be1ff;
+      }
+      #proxypanel .row input[type="range"] {
+        flex: 1;
+        margin: 0;
+      }
+      #proxypanel .row .val {
+        flex: 0 0 56px;
+        text-align: right;
+        color: #ffc870;
+      }
+      #proxypanel .head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        border-bottom: 1px dotted #333;
+        padding-bottom: 2px;
+        margin-bottom: 1px;
+      }
+      #proxypanel .head .title { color: #8be1ff; flex: 1; }
+      #proxypanel .head button {
+        font: inherit;
+        color: #d0d0d0;
+        background: #222;
+        border: 1px solid #444;
+        padding: 0 6px;
+        cursor: pointer;
+      }
+      #proxypanel .head button:hover { background: #2a3a5a; }
+      #proxypanel .head .toggle.on {
+        color: #b8ffb8;
+        border-color: #6c6;
+        background: #143014;
+      }
     </style>
   </head>
   <body>
@@ -255,9 +320,26 @@
         <div id="netdetail"><div class="placeholder">select an exchange on the left</div></div>
       </div>
     </div>
+    <div id="proxypanel" role="dialog" aria-label="SIM-006 proxy controls">
+      <div class="head">
+        <span class="title">proxy (sim LoRa)</span>
+        <button id="proxy-toggle" class="toggle" title="enable proxy mode">off</button>
+        <button id="proxy-close" title="close (Alt+L)">×</button>
+      </div>
+      <div class="row">
+        <label for="proxy-latency">latency</label>
+        <input id="proxy-latency" type="range" min="0" max="30000" step="100" value="0" />
+        <span id="proxy-latency-val" class="val">0 ms</span>
+      </div>
+      <div class="row">
+        <label for="proxy-loss">loss</label>
+        <input id="proxy-loss" type="range" min="0" max="50" step="1" value="0" />
+        <span id="proxy-loss-val" class="val">0 %</span>
+      </div>
+    </div>
     <div id="input-feed"></div>
     <div id="status">…</div>
-    <div id="hint">Alt+J/K vectors · Alt+P picker · Alt+G direct · Alt+N net · Alt+R reload · Esc=BACK · arrows=encoder</div>
+    <div id="hint">Alt+J/K vectors · Alt+P picker · Alt+G direct · Alt+N net · Alt+L proxy · Alt+R reload · Esc=BACK · arrows=encoder</div>
     <script type="module">
       const { invoke } = window.__TAURI__.core;
 
@@ -277,6 +359,28 @@
       const netRefresh = document.getElementById('net-refresh');
       const netClearBtn = document.getElementById('net-clear');
       const netCloseBtn = document.getElementById('net-close');
+      const proxypanel = document.getElementById('proxypanel');
+      const proxyToggleBtn = document.getElementById('proxy-toggle');
+      const proxyCloseBtn = document.getElementById('proxy-close');
+      const proxyLatencyEl = document.getElementById('proxy-latency');
+      const proxyLatencyVal = document.getElementById('proxy-latency-val');
+      const proxyLossEl = document.getElementById('proxy-loss');
+      const proxyLossVal = document.getElementById('proxy-loss-val');
+
+      // SIM-006 — Proxy mode mirror of the backend `ProxyConfig`. Kept
+      // in sync with sliders; pushed to the backend after each change.
+      // The backend echoes back its clamped config so a buggy input
+      // can't desync the UI.
+      let proxyConfig = {
+        enabled: false,
+        latency_ms: 0,
+        loss_rate: 0.0,
+        mtu_bytes: 250,
+      };
+      // Cumulative count of proxy-simulated drops since the panel was
+      // last opened — surfaces in the panel header so engineers can
+      // tell at a glance whether the loss slider is actually biting.
+      let proxyDroppedTotal = 0;
 
       let vectors = [];
       let index = 0;
@@ -389,8 +493,21 @@
         screen.src = `data:image/png;base64,${result.png_b64}`;
         const errSuffix = result.decode_error ? ` ! ${result.decode_error}` : '';
         const ct = result.content_type ? ` ${result.content_type}` : '';
+        // SIM-006 — when proxy mode is on, the backend annotates each
+        // fetch with the simulated fragment / loss / airtime numbers.
+        // Hang them off the right side of the status line so it stays
+        // readable when the panel is closed.
+        const proxySuffix = result.proxy
+          ? ` · proxy ${result.proxy.fragments_sent}/${result.proxy.total_fragments}frag ${result.proxy.simulated_latency_ms}ms`
+          : '';
         status.textContent =
-          `${result.status}${ct} ${result.url} (${result.body_bytes}B)${errSuffix}`;
+          `${result.status}${ct} ${result.url} (${result.body_bytes}B)${proxySuffix}${errSuffix}`;
+        if (result.proxy && result.proxy.fragments_lost > 0) {
+          proxyDroppedTotal += result.proxy.fragments_lost;
+          if (proxypanel.classList.contains('open')) {
+            updateProxyHeader();
+          }
+        }
         if (netpanel.classList.contains('open')) {
           // Don't blow away the selection — the engineer may be reading
           // the previous exchange while a new one lands.
@@ -644,6 +761,95 @@
         }
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // SIM-006 — Proxy panel.
+      //
+      // Reads `proxy_state` once at startup to pick up backend-clamped
+      // values, then pushes `proxy_set_config` after each slider change.
+      // The backend echoes back the (possibly clamped) config so the UI
+      // can't drift outside the modeled envelope. Loss slider uses a
+      // 0..50 integer mapping to a 0..0.5 float to keep the UI obvious.
+      // ─────────────────────────────────────────────────────────────
+
+      function formatProxyLatency(ms) {
+        if (ms < 1000) return `${ms} ms`;
+        return `${(ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 1)} s`;
+      }
+
+      function formatProxyLoss(rate) {
+        return `${Math.round(rate * 100)} %`;
+      }
+
+      function updateProxyHeader() {
+        const dropNote = proxyDroppedTotal > 0
+          ? ` · drops:${proxyDroppedTotal}`
+          : '';
+        proxyToggleBtn.textContent = proxyConfig.enabled ? `on${dropNote}` : 'off';
+        proxyToggleBtn.classList.toggle('on', !!proxyConfig.enabled);
+      }
+
+      function reflectProxyConfig() {
+        proxyLatencyEl.value = String(proxyConfig.latency_ms);
+        proxyLatencyVal.textContent = formatProxyLatency(proxyConfig.latency_ms);
+        // Loss slider is a 0..50 int representing 0..50% — multiply by 0.01.
+        proxyLossEl.value = String(Math.round(proxyConfig.loss_rate * 100));
+        proxyLossVal.textContent = formatProxyLoss(proxyConfig.loss_rate);
+        updateProxyHeader();
+      }
+
+      async function pushProxyConfig(next) {
+        try {
+          const echoed = await invoke('proxy_set_config', { config: next });
+          proxyConfig = echoed;
+        } catch (err) {
+          status.textContent = `proxy config error: ${err}`;
+          return;
+        }
+        reflectProxyConfig();
+      }
+
+      async function loadProxyConfig() {
+        try {
+          proxyConfig = await invoke('proxy_state');
+        } catch (err) {
+          // Wiring bug — log it but don't block startup. Sliders stay
+          // at their HTML defaults so the engineer can still drive.
+          status.textContent = `proxy state error: ${err}`;
+        }
+        reflectProxyConfig();
+      }
+
+      function toggleProxyPanel() {
+        if (proxypanel.classList.contains('open')) {
+          proxypanel.classList.remove('open');
+        } else {
+          // Reset the drops counter when the panel reopens so the
+          // displayed value tracks "this debugging session", not the
+          // entire process lifetime.
+          proxyDroppedTotal = 0;
+          updateProxyHeader();
+          proxypanel.classList.add('open');
+        }
+      }
+
+      proxyLatencyEl.addEventListener('input', () => {
+        const ms = parseInt(proxyLatencyEl.value, 10) | 0;
+        proxyLatencyVal.textContent = formatProxyLatency(ms);
+        pushProxyConfig({ ...proxyConfig, latency_ms: ms });
+      });
+      proxyLossEl.addEventListener('input', () => {
+        const pct = parseInt(proxyLossEl.value, 10) | 0;
+        const rate = pct / 100;
+        proxyLossVal.textContent = formatProxyLoss(rate);
+        pushProxyConfig({ ...proxyConfig, loss_rate: rate });
+      });
+      proxyToggleBtn.addEventListener('click', () => {
+        pushProxyConfig({ ...proxyConfig, enabled: !proxyConfig.enabled });
+      });
+      proxyCloseBtn.addEventListener('click', () => {
+        proxypanel.classList.remove('open');
+      });
+
       netRefresh.addEventListener('click', () => refreshNetList({ keepSelection: true }));
       netClearBtn.addEventListener('click', async () => {
         try {
@@ -785,6 +991,10 @@
               toggleNetPanel();
               ev.preventDefault();
               return;
+            case 'KeyL':
+              toggleProxyPanel();
+              ev.preventDefault();
+              return;
           }
         }
 
@@ -792,6 +1002,12 @@
         // panel, not the device — let the browser handle scroll / clicks
         // and swallow everything else.
         if (netpanel.classList.contains('open')) {
+          return;
+        }
+
+        // While the proxy panel is open, slider keystrokes belong to
+        // the panel; swallow device input until it closes.
+        if (proxypanel.classList.contains('open')) {
           return;
         }
 
@@ -835,6 +1051,10 @@
       // Vector dev tooling (Alt+P/J/K) still works either way — the
       // vectors list is populated regardless so an engineer can flip back.
       async function init() {
+        // SIM-006 — pull live proxy config first so the panel reflects
+        // backend state when first opened, even if the engineer never
+        // touches the sliders.
+        await loadProxyConfig();
         let startup = null;
         try {
           startup = await invoke('startup_url');
