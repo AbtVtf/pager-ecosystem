@@ -56,6 +56,19 @@ service logs a warning — production deployments must set them).
 | `PUSH_RELAY_REDIS_URL` | `redis://localhost:6379/0`    | `redis://` or `rediss://`              |
 | `PUSH_RELAY_BUILD_TAG` | `dev`                         | Surfaced in `/healthz` for ops sanity  |
 | `PUSH_RELAY_MARKETPLACE_URL` | _(unset)_               | Registry root (e.g. `https://market.pageros.org`). When unset, `POST /push` returns 503 — the relay has no way to verify app signatures without it. |
+
+### statusd (PUSH-010)
+
+`statusd` (in `cmd/statusd/`) is a separate binary that serves the public
+uptime page at `status.pageros.org`. It runs in its own container so a relay
+crash does not take the page down with it.
+
+| Env var                       | Required | Default | Notes                                              |
+| ----------------------------- | -------- | ------- | -------------------------------------------------- |
+| `STATUSD_ADDR`                | no       | `:8080` | Listen address.                                    |
+| `STATUSD_PROMETHEUS_URL`      | yes      | —       | Prometheus base URL (e.g. `http://prometheus:9090`).|
+| `STATUSD_AVAILABILITY_TARGET` | no       | `0.995` | SLO target as a fraction (0..1). Pinned to SLO §1.1.|
+| `STATUSD_CACHE_TTL`           | no       | `15s`   | Snapshot cache; matches Prometheus scrape interval.|
 | `PUSH_RELAY_ADMIN_TOKEN` | _(unset)_                   | Bearer token for `/admin/*` (PUSH-008). Must be ≥16 chars. When unset, all admin routes return `503 Service Unavailable`. |
 
 The `/metrics` endpoint is unauthenticated. Production deploys MUST restrict
@@ -317,3 +330,28 @@ Storage is in-memory; counters reset on restart. Cross-restart
 persistence and metrics export live with PUSH-009 alongside the
 deployment + monitoring story — the M3 acceptance only requires an
 authenticated *view* of volumes and a ban knob, which this delivers.
+
+## What this task delivers (PUSH-010)
+
+Public SLO + uptime page:
+
+- **`docs/SLO.md`** — published Service Level Objective for
+  `push.pageros.org`. Documents the 99.5% / 28-day availability target,
+  latency targets, queue retention rules, at-least-once delivery
+  contract, rate-limit policy, and the error-budget policy that drives
+  reliability prioritisation.
+- **`cmd/statusd/`** — small Go binary that serves the public uptime
+  page at `status.pageros.org`. Queries the relay's Prometheus
+  instance (added in PUSH-009) and renders:
+  - `GET /` — HTML page with overall banner, per-component status
+    (push relay, storage, marketplace lookup), 28-day availability,
+    error budget remaining, queue gauges, and current uptime.
+  - `GET /api/status.json` — machine-readable snapshot for external
+    uptime aggregators.
+  - `GET /healthz` — statusd's own liveness.
+- Snapshots are cached server-side for 15s (configurable) and serve
+  stale-on-error so a Prometheus blip does not take the public page
+  down.
+- Runs in its own container (`Dockerfile.statusd`, wired into
+  `docker-compose.prod.yml`) so a push-relay crash cannot take the
+  status page down.

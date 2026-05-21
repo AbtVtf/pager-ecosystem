@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1.7
+#
+# Builds statusd, the status.pageros.org binary (PUSH-010). Kept separate from
+# the relay image so a push-relay rebuild does not invalidate the status
+# page's image cache — and so a vulnerability in the relay binary never
+# automatically lands in the status page binary.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/statusd ./cmd/statusd
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/statusd /statusd
+EXPOSE 8081
+USER nonroot:nonroot
+ENTRYPOINT ["/statusd"]

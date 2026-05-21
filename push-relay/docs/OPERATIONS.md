@@ -6,8 +6,9 @@ day-to-day "what does this metric mean" questions. SPEC-level decisions live
 in [SPEC.md §6.6](../../SPEC.md) — this file is downstream of those.
 
 > **Workspace scope.** This runbook is part of the `push-relay/` subsystem.
-> Anything cross-cutting (org-wide SLO, status page, public uptime feed) is
-> tracked separately under PUSH-010.
+> The public SLO and uptime page are documented in
+> [`SLO.md`](./SLO.md) and served by `statusd`
+> ([`cmd/statusd/`](../cmd/statusd/)) — see §7 for ops notes.
 
 ---
 
@@ -265,6 +266,7 @@ plan a scale-up issue assigned to CEO.
 | Concern                              | File                                                                 |
 | ------------------------------------ | -------------------------------------------------------------------- |
 | TLS cert + admin token rotation      | [`KEY-ROTATION.md`](./KEY-ROTATION.md)                               |
+| Public SLO + status page (PUSH-010)  | [`SLO.md`](./SLO.md) · `cmd/statusd/` · `internal/status/`           |
 | Production compose stack             | [`docker-compose.prod.yml`](../docker-compose.prod.yml)              |
 | Prometheus scrape + alert rules      | [`deploy/prometheus/`](../deploy/prometheus/)                        |
 | Alertmanager routing                 | [`deploy/alertmanager/`](../deploy/alertmanager/)                    |
@@ -273,3 +275,41 @@ plan a scale-up issue assigned to CEO.
 | Metric wiring + gauge refresher      | [`internal/server/metrics.go`](../internal/server/metrics.go)        |
 | Admin / ban list (PUSH-008)          | [`internal/admin/`](../internal/admin/)                              |
 | SPEC §6.6 (Push Relay)               | [`../../SPEC.md`](../../SPEC.md)                                     |
+
+---
+
+## 7. Status page (PUSH-010)
+
+`statusd` (in `cmd/statusd/`) serves the public uptime page at
+`status.pageros.org`. It is intentionally a separate container so a relay
+crash cannot take the page down — the whole point of a status page is that
+it works when nothing else does.
+
+**Routes:**
+
+- `GET /` — HTML status page.
+- `GET /api/status.json` — machine-readable snapshot for external aggregators.
+- `GET /healthz` — statusd's own liveness (not the relay's).
+
+**Data source:** Prometheus (`STATUSD_PROMETHEUS_URL`), reachable on the
+compose-internal network. statusd does not talk to Redis or the relay
+directly — that keeps the dependency tree single-arrow: page → Prometheus
+→ relay.
+
+**Cache:** statusd caches the last good snapshot for 15s
+(`STATUSD_CACHE_TTL`). If Prometheus is unreachable, the page serves the
+most recent successful snapshot rather than 503 (stale-on-error).
+
+**Deploy alongside the relay:**
+
+```sh
+docker compose -f docker-compose.prod.yml up -d statusd
+```
+
+Then front statusd with whatever TLS terminator the relay is behind —
+**but use a different cert / pod from the relay**. The SLO commits to the
+page being available when the relay is not.
+
+**SLO source-of-truth:** [`SLO.md`](./SLO.md). Any change to the targets
+must update both that document and the `STATUSD_AVAILABILITY_TARGET` env
+var in `docker-compose.prod.yml`.

@@ -94,6 +94,29 @@ services:
       - "127.0.0.1:9093:9093"
     restart: unless-stopped
 
+  statusd:
+    # PUSH-010: public uptime page served at status.pageros.org. Runs in its
+    # own container so a push-relay crash does not take the status page down
+    # with it — the entire point of a status page is that it works when the
+    # service it reports on does not.
+    build:
+      context: .
+      dockerfile: Dockerfile.statusd
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      STATUSD_ADDR: ":8081"
+      STATUSD_PROMETHEUS_URL: "http://prometheus:9090"
+      STATUSD_AVAILABILITY_TARGET: "0.995"
+      STATUSD_CACHE_TTL: "15s"
+    ports:
+      # Bind to the public interface so a TLS terminator (caddy/nginx/cloud
+      # LB) can front it. The status page MUST NOT share the relay's cert
+      # or pod — a relay outage cannot be allowed to take down the page.
+      - "8081:8081"
+    restart: unless-stopped
+
 volumes:
   redis-data:
   prometheus-data:
