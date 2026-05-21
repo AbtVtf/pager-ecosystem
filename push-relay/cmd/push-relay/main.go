@@ -68,6 +68,16 @@ func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Background queue-depth + storage Ping sampler that feeds /metrics. We
+	// own the goroutine lifecycle here so cancellation on SIGTERM stops the
+	// scan cleanly before Shutdown returns.
+	refresher := server.NewStatsRefresher(store, srv.Metrics(), 0, 0, logger)
+	refresherDone := make(chan struct{})
+	go func() {
+		refresher.Run(rootCtx)
+		close(refresherDone)
+	}()
+
 	errs := make(chan error, 1)
 	go func() {
 		logger.Info("push-relay starting",
@@ -94,6 +104,9 @@ func main() {
 			logger.Error("graceful shutdown failed", "err", err)
 			os.Exit(1)
 		}
+		// Wait for the metrics refresher to drain after the listener stops so
+		// the last sample doesn't race a Redis close.
+		<-refresherDone
 		logger.Info("push-relay stopped cleanly")
 	}
 }

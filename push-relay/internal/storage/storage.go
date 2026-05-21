@@ -55,6 +55,22 @@ var (
 	ErrPayloadTooLarge = errors.New("storage: payload exceeds per-device byte cap")
 )
 
+// Stats is an aggregate snapshot of the queue state across all devices. Used
+// by the /metrics endpoint to surface "is the relay backing up?" alerts
+// (PUSH-009). Per-device counts are deliberately omitted: device pubkeys are
+// high-cardinality and would explode the Prometheus series count.
+type Stats struct {
+	// Devices is the number of distinct devices currently holding at least
+	// one queued notification.
+	Devices int
+	// Entries is the total number of queued notifications across all devices.
+	Entries int
+	// MaxDepth is the largest single-device queue depth observed in this
+	// snapshot. Tells operators whether the queue is broad-and-shallow or
+	// stuck on a single device.
+	MaxDepth int
+}
+
 // Store is the abstract queue backend. Implementations MUST enforce the queue
 // caps and TTL described in the package doc and SPEC §6.6.
 type Store interface {
@@ -80,6 +96,11 @@ type Store interface {
 	// Delete removes the notification with the given id from the device's
 	// queue. Returns true if the entry existed and was removed.
 	Delete(ctx context.Context, devicePubkey, id string) (bool, error)
+
+	// Stats returns an aggregate snapshot. Implementations MAY return cached
+	// or sampled data — callers MUST treat values as approximate at the
+	// scrape interval. Expired entries SHOULD NOT count.
+	Stats(ctx context.Context) (Stats, error)
 }
 
 // newNotificationID returns a 128-bit random hex id. The relay assigns this on

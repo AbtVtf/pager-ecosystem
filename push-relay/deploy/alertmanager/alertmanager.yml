@@ -1,0 +1,35 @@
+# Alertmanager config for push-relay (PUSH-009).
+#
+# The default route below silently swallows alerts ("null" receiver). Replace
+# the receiver block with a real Slack / PagerDuty / Email config when wiring
+# this up to the on-call rotation.
+#
+# Reference: https://prometheus.io/docs/alerting/latest/configuration/
+
+route:
+  group_by: ["alertname", "service"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: "default"
+  routes:
+    - matchers:
+        - severity = "page"
+      receiver: "pager"
+      continue: false
+    - matchers:
+        - severity = "warn"
+      receiver: "warn"
+      continue: false
+
+receivers:
+  - name: default
+  - name: pager
+    # webhook_configs:
+    #   - url: "https://hooks.example.com/pagerduty/<integration-key>"
+    #     send_resolved: true
+  - name: warn
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/..."
+    #     channel: "#push-relay-warn"
+    #     send_resolved: true

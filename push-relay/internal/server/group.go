@@ -11,6 +11,7 @@ import (
 
 	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
+	"github.com/pageros/pageros/push-relay/internal/metrics"
 	"github.com/pageros/pageros/push-relay/internal/pageossig"
 	"github.com/pageros/pageros/push-relay/internal/ratelimit"
 	"github.com/pageros/pageros/push-relay/internal/storage"
@@ -98,7 +99,7 @@ type groupPushResponse struct {
 // Auth + ban + signature verification are all-or-nothing: those failures
 // reject the whole batch with the same status codes as /push, since the
 // relay can't trust *any* recipient bytes if it can't trust the sender.
-func newGroupPushHandler(store storage.Store, lookup manifest.Lookup, recorder admin.Recorder, limiter ratelimit.Limiter, logger *slog.Logger, maxSkew time.Duration, maxBodyBytes int64, maxRecipients, maxPayloadBytes int) http.Handler {
+func newGroupPushHandler(store storage.Store, lookup manifest.Lookup, recorder admin.Recorder, limiter ratelimit.Limiter, logger *slog.Logger, maxSkew time.Duration, maxBodyBytes int64, maxRecipients, maxPayloadBytes int, recipientCounter *metrics.Counter) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -208,22 +209,26 @@ func newGroupPushHandler(store storage.Store, lookup manifest.Lookup, recorder a
 			res := groupRecipientResult{DevicePubkey: rec.DevicePubkey}
 			if _, err := pageossig.DecodePubkey(rec.DevicePubkey); err != nil {
 				res.Status = GroupResultBadDevice
+				recordGroupResult(recipientCounter, res.Status)
 				results = append(results, res)
 				continue
 			}
 			payload, err := decodeGroupPayload(rec.PayloadB64)
 			if err != nil {
 				res.Status = GroupResultBadPayload
+				recordGroupResult(recipientCounter, res.Status)
 				results = append(results, res)
 				continue
 			}
 			if len(payload) == 0 {
 				res.Status = GroupResultPayloadEmpty
+				recordGroupResult(recipientCounter, res.Status)
 				results = append(results, res)
 				continue
 			}
 			if len(payload) > maxPayloadBytes {
 				res.Status = GroupResultPayloadLarge
+				recordGroupResult(recipientCounter, res.Status)
 				results = append(results, res)
 				continue
 			}
@@ -238,6 +243,7 @@ func newGroupPushHandler(store storage.Store, lookup manifest.Lookup, recorder a
 						secs = 1
 					}
 					res.RetryAfter = secs
+					recordGroupResult(recipientCounter, res.Status)
 					results = append(results, res)
 					continue
 				}
@@ -255,6 +261,7 @@ func newGroupPushHandler(store storage.Store, lookup manifest.Lookup, recorder a
 					logger.Error("group enqueue failed", "err", err, "app", appID, "device", rec.DevicePubkey)
 					res.Status = GroupResultStorageError
 				}
+				recordGroupResult(recipientCounter, res.Status)
 				results = append(results, res)
 				continue
 			}
@@ -265,6 +272,7 @@ func newGroupPushHandler(store storage.Store, lookup manifest.Lookup, recorder a
 			res.Status = GroupResultAccepted
 			res.ID = stored.ID
 			res.EnqueuedAt = stored.EnqueuedAt.Unix()
+			recordGroupResult(recipientCounter, res.Status)
 			results = append(results, res)
 		}
 
@@ -272,6 +280,16 @@ func newGroupPushHandler(store storage.Store, lookup manifest.Lookup, recorder a
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(groupPushResponse{Results: results})
 	})
+}
+
+// recordGroupResult increments the per-recipient outcome counter if one is
+// wired up. Kept here (not in metrics.go) because the status enum strings live
+// alongside the handler that produces them.
+func recordGroupResult(c *metrics.Counter, status string) {
+	if c == nil {
+		return
+	}
+	c.Inc("status", status)
 }
 
 // decodeGroupPayload accepts the canonical raw-base64url form produced by the

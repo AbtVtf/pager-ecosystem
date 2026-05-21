@@ -1,0 +1,101 @@
+# Alert rules for the push relay (PUSH-009).
+#
+# These rules cover the PUSH-009 acceptance: uptime + queue depth. Severity
+# levels are advisory — wire alertmanager.yml routes to your paging channels
+# as appropriate.
+#
+# Cardinality note: all gauges/counters are low-cardinality (label keys
+# `result`, `status`, `tag`, `instance`). It's safe to slice by `instance`
+# when running multiple relay replicas behind a load balancer.
+
+groups:
+  - name: push-relay.uptime
+    rules:
+      - alert: PushRelayDown
+        # `up` is Prometheus' built-in per-target gauge. If the scrape fails
+        # twice in a row (~30s), the relay is either down or unreachable.
+        expr: up{job="push-relay"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "push-relay {{ $labels.instance }} is unreachable"
+          description: >
+            Prometheus has been unable to scrape /metrics for at least 1 minute.
+            Check the container, network, and TLS cert validity.
+          runbook: "push-relay/docs/OPERATIONS.md#alert-pushrelaydown"
+
+      - alert: PushRelayStorageDown
+        # The relay sets push_relay_storage_up to 0 when the periodic Redis
+        # Ping fails. /healthz also returns 503 in that state, but the
+        # gauge lets us alert without external probes.
+        expr: push_relay_storage_up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "push-relay backend storage unreachable"
+          description: >
+            The relay's background sampler reports storage Ping failures for
+            ≥ 2 minutes. New pushes will fail with 5xx until storage recovers.
+          runbook: "push-relay/docs/OPERATIONS.md#alert-pushrelaystoragedown"
+
+  - name: push-relay.queue
+    rules:
+      - alert: PushRelayQueueBacklog
+        # Aggregate queue size across all devices. The hard cap per device is
+        # 16 entries × 1 MiB total; the threshold here is the early-warning
+        # band that says "we have many partially-full queues piling up", not
+        # "we are at the cap" (that would already be evicting oldest first).
+        expr: push_relay_queue_entries > 5000
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "push-relay aggregate queue depth is elevated"
+          description: >
+            More than 5,000 notifications are queued across all devices for
+            10+ minutes. Devices may be offline (expected during a wider
+            outage), or a sender app is over-pushing under the per-device cap.
+          runbook: "push-relay/docs/OPERATIONS.md#alert-pushrelayqueuebacklog"
+
+      - alert: PushRelayQueueStuck
+        # MaxDepth at the per-device cap means at least one device is at
+        # MaxQueueLen (16, SPEC §6.6.4). Sustained pinning at the cap means
+        # the device hasn't pulled in a long time AND a sender is still
+        # pushing — combined with the byte cap, oldest entries are being
+        # evicted on each new push, which is bad for delivery.
+        expr: push_relay_queue_depth_max >= 16
+        for: 30m
+        labels:
+          severity: warn
+        annotations:
+          summary: "push-relay has a device queue pinned at the per-device cap"
+          description: >
+            At least one device queue is at MaxQueueLen (16) for 30+ minutes;
+            new pushes to that device are evicting older entries on insert.
+            Investigate whether the device is offline, the sender is busted,
+            or rate-limit bands need tuning.
+          runbook: "push-relay/docs/OPERATIONS.md#alert-pushrelayqueuestuck"
+
+  - name: push-relay.errors
+    rules:
+      - alert: PushRelayPushErrorRateHigh
+        # Burn budget: if more than 10% of /push requests fail with 5xx for
+        # 10 minutes, page. Excludes 401/403/429 because those are
+        # client-driven and not the relay's fault.
+        expr: |
+          sum(rate(push_relay_push_requests_total{result=~"storage_error|lookup_unavailable"}[5m]))
+            /
+          clamp_min(sum(rate(push_relay_push_requests_total[5m])), 0.01)
+            > 0.1
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "push-relay /push 5xx rate above 10%"
+          description: >
+            Over 10% of /push requests in the last 5 minutes returned a
+            storage or marketplace lookup error. Check storage + marketplace
+            registry connectivity.
+          runbook: "push-relay/docs/OPERATIONS.md#alert-pushrelaypusherrorratehigh"

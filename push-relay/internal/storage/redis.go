@@ -172,6 +172,60 @@ func (s *redisStore) List(ctx context.Context, devicePubkey string) ([]Notificat
 	return out, nil
 }
 
+// Stats walks all queue keys for an aggregate snapshot. SCAN+ZCARD is O(k) in
+// the number of devices with pending data; the per-device cap (MaxQueueLen
+// = 16) and key-level TTL keep that bounded for healthy operation. If the
+// universe ever grows large enough for this to matter, replace this with a
+// maintained "active devices" set updated inside the enqueue Lua script.
+//
+// The scan respects ctx for cancellation so /metrics scrapes can time out
+// rather than block the listener.
+func (s *redisStore) Stats(ctx context.Context) (Stats, error) {
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
+
+	cutoff := time.Now().Add(-QueueTTL).UnixNano()
+	pattern := s.keyPrefix + "*"
+	var (
+		cursor uint64
+		stats  Stats
+	)
+	for {
+		var (
+			batch []string
+			err   error
+		)
+		batch, cursor, err = s.client.Scan(ctx, cursor, pattern, 256).Result()
+		if err != nil {
+			return Stats{}, fmt.Errorf("redis scan: %w", err)
+		}
+		for _, key := range batch {
+			// Prune expired entries before counting so a queue that's
+			// entirely stale doesn't get counted as "still backed up".
+			if err := s.client.ZRemRangeByScore(ctx, key, "-inf", fmt.Sprintf("(%d", cutoff)).Err(); err != nil {
+				return Stats{}, fmt.Errorf("redis prune (%s): %w", key, err)
+			}
+			count, err := s.client.ZCard(ctx, key).Result()
+			if err != nil {
+				return Stats{}, fmt.Errorf("redis zcard (%s): %w", key, err)
+			}
+			if count == 0 {
+				continue
+			}
+			stats.Devices++
+			stats.Entries += int(count)
+			if int(count) > stats.MaxDepth {
+				stats.MaxDepth = int(count)
+			}
+		}
+		if cursor == 0 {
+			break
+		}
+	}
+	return stats, nil
+}
+
 func (s *redisStore) Delete(ctx context.Context, devicePubkey, id string) (bool, error) {
 	if devicePubkey == "" {
 		return false, ErrInvalidDevice

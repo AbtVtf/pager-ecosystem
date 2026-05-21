@@ -1,0 +1,100 @@
+# PUSH-009: production deployment stack for the push relay.
+#
+# The dev stack (docker-compose.yml) ships only relay + Redis. This file adds
+# Prometheus + Alertmanager for the monitoring half of the PUSH-009 acceptance
+# (uptime + queue depth alerts). It is deliberately minimal — operators are
+# expected to layer TLS termination (caddy/nginx/cloud LB), log shipping, and
+# off-host backups on top.
+#
+# Required before bringing this up:
+#
+#   1. Production TLS cert + key mounted at ./certs/{cert,key}.pem (or rebind
+#      the relay's volume to a Let's Encrypt directory). NEVER reuse the dev
+#      certs from scripts/gen-dev-tls.sh — see docs/KEY-ROTATION.md.
+#   2. PUSH_RELAY_ADMIN_TOKEN exported with a ≥ 32-char secret. The relay
+#      refuses to start with a shorter token; do not weaken that check.
+#   3. PUSH_RELAY_MARKETPLACE_URL pointed at the live marketplace registry.
+#   4. Redis ACL config in ./redis/redis.conf — see docs/KEY-ROTATION.md for
+#      the recommended account split (relay user + ops user).
+#
+# Bring up:
+#
+#   PUSH_RELAY_ADMIN_TOKEN=$(openssl rand -hex 32) \
+#   PUSH_RELAY_MARKETPLACE_URL=https://market.pageros.org \
+#     docker compose -f docker-compose.prod.yml up -d
+#
+# Tear down:
+#
+#   docker compose -f docker-compose.prod.yml down
+#
+# Volumes are NOT removed by `down`. Use `down -v` only after backups.
+
+services:
+  redis:
+    image: redis:7-alpine
+    command:
+      - "redis-server"
+      - "/etc/redis/redis.conf"
+    volumes:
+      - redis-data:/data
+      - ./redis/redis.conf:/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+    # Production Redis should never face the public internet; expose only on
+    # the compose-managed network.
+
+  push-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      PUSH_RELAY_ADDR: ":8443"
+      PUSH_RELAY_REDIS_URL: "redis://relay:${REDIS_RELAY_PASSWORD:?REDIS_RELAY_PASSWORD must be set}@redis:6379/0"
+      PUSH_RELAY_TLS_CERT: "/certs/cert.pem"
+      PUSH_RELAY_TLS_KEY: "/certs/key.pem"
+      PUSH_RELAY_BUILD_TAG: "${PUSH_RELAY_BUILD_TAG:-prod}"
+      PUSH_RELAY_MARKETPLACE_URL: "${PUSH_RELAY_MARKETPLACE_URL:?PUSH_RELAY_MARKETPLACE_URL must be set}"
+      PUSH_RELAY_ADMIN_TOKEN: "${PUSH_RELAY_ADMIN_TOKEN:?PUSH_RELAY_ADMIN_TOKEN must be set}"
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./certs:/certs:ro
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./deploy/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  prometheus-data:
+  alertmanager-data:

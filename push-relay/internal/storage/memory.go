@@ -94,6 +94,29 @@ func (m *memoryStore) List(ctx context.Context, devicePubkey string) ([]Notifica
 	return out, nil
 }
 
+func (m *memoryStore) Stats(ctx context.Context) (Stats, error) {
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
+	now := m.now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var stats Stats
+	for pk := range m.queues {
+		q := m.pruneExpiredLocked(pk, now)
+		if len(q) == 0 {
+			continue
+		}
+		stats.Devices++
+		stats.Entries += len(q)
+		if len(q) > stats.MaxDepth {
+			stats.MaxDepth = len(q)
+		}
+	}
+	return stats, nil
+}
+
 func (m *memoryStore) Delete(ctx context.Context, devicePubkey, id string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err

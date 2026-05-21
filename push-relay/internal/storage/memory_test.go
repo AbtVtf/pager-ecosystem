@@ -246,6 +246,49 @@ func TestEnqueueGroupEventKind(t *testing.T) {
 	}
 }
 
+func TestStatsAcrossDevicesAndExpiry(t *testing.T) {
+	s, clk := newClockedStore(t)
+	// device-a: 3 entries (one expired before snapshot, two live).
+	_, _ = s.Enqueue(context.Background(), "device-a", Notification{Payload: []byte("a-old")})
+	clk.advance(QueueTTL + time.Hour)
+	_, _ = s.Enqueue(context.Background(), "device-a", Notification{Payload: []byte("a-new-1")})
+	clk.advance(time.Second)
+	_, _ = s.Enqueue(context.Background(), "device-a", Notification{Payload: []byte("a-new-2")})
+
+	// device-b: 1 entry.
+	_, _ = s.Enqueue(context.Background(), "device-b", Notification{Payload: []byte("b")})
+
+	// device-c: only an expired entry should not count once stats prunes.
+	clk.advance(-QueueTTL - 2*time.Hour) // go back so insert is "old"
+	_, _ = s.Enqueue(context.Background(), "device-c", Notification{Payload: []byte("c-stale")})
+	clk.advance(QueueTTL + time.Hour)
+
+	stats, err := s.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Devices != 2 {
+		t.Errorf("Devices = %d, want 2 (c expired)", stats.Devices)
+	}
+	if stats.Entries != 3 {
+		t.Errorf("Entries = %d, want 3", stats.Entries)
+	}
+	if stats.MaxDepth != 2 {
+		t.Errorf("MaxDepth = %d, want 2 (device-a holds 2)", stats.MaxDepth)
+	}
+}
+
+func TestStatsEmpty(t *testing.T) {
+	s, _ := newClockedStore(t)
+	stats, err := s.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats != (Stats{}) {
+		t.Errorf("Stats = %+v, want zero", stats)
+	}
+}
+
 func TestNewNotificationIDFormat(t *testing.T) {
 	id := newNotificationID()
 	if len(id) != 32 {

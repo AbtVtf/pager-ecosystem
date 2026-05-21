@@ -10,6 +10,7 @@ import (
 
 	"github.com/pageros/pageros/push-relay/internal/admin"
 	"github.com/pageros/pageros/push-relay/internal/manifest"
+	"github.com/pageros/pageros/push-relay/internal/metrics"
 	"github.com/pageros/pageros/push-relay/internal/ratelimit"
 	"github.com/pageros/pageros/push-relay/internal/storage"
 )
@@ -37,6 +38,11 @@ type Options struct {
 	// (SPEC §6.6.6 keeps the bucket separate from user notifications,
 	// PUSH-007). When nil, the server allocates a fresh in-memory limiter.
 	GroupLimiter ratelimit.Limiter
+	// Metrics is the Prometheus surface (PUSH-009). When nil, the server
+	// constructs a fresh MetricSet so /metrics still serves something — but
+	// callers that want to inject custom metrics (or share a registry with
+	// the rest of the process) should pass an instance.
+	Metrics *MetricSet
 }
 
 type Server struct {
@@ -59,13 +65,17 @@ func New(opts Options) *Server {
 	if opts.GroupLimiter == nil {
 		opts.GroupLimiter = ratelimit.NewMemory()
 	}
+	if opts.Metrics == nil {
+		opts.Metrics = NewMetricSet(opts.BuildTag)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", newHealthzHandler(opts.Storage, opts.BuildTag))
-	mux.Handle("GET /pull/{device_pubkey}", newPullHandler(opts.Storage, opts.Logger, 0))
-	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.Limiter, opts.Logger, 0, opts.MaxPushBytes))
-	mux.Handle("DELETE /pull/{device_pubkey}/{notification_id}", newAckHandler(opts.Storage, opts.Logger, 0))
-	mux.Handle("POST /group_push", newGroupPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.GroupLimiter, opts.Logger, 0, 0, 0, 0))
+	mux.Handle("/metrics", metrics.NewHandler(opts.Metrics.Registry))
+	mux.Handle("GET /pull/{device_pubkey}", instrument(newPullHandler(opts.Storage, opts.Logger, 0), opts.Metrics.PullRequests))
+	mux.Handle("POST /push/{device_pubkey}", instrument(newPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.Limiter, opts.Logger, 0, opts.MaxPushBytes), opts.Metrics.PushRequests))
+	mux.Handle("DELETE /pull/{device_pubkey}/{notification_id}", instrument(newAckHandler(opts.Storage, opts.Logger, 0), opts.Metrics.AckRequests))
+	mux.Handle("POST /group_push", instrument(newGroupPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.GroupLimiter, opts.Logger, 0, 0, 0, 0, opts.Metrics.GroupRecipients), opts.Metrics.GroupRequests))
 	admin.Mount(mux, admin.MountConfig{Store: opts.Admin, Token: opts.AdminToken, Logger: opts.Logger})
 
 	s := &Server{
@@ -105,4 +115,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // Handler exposes the underlying mux for tests.
 func (s *Server) Handler() http.Handler {
 	return s.http.Handler
+}
+
+// Metrics returns the metric set wired into the server, useful for the
+// stats refresher in main.go and for tests that need to assert counter
+// state directly.
+func (s *Server) Metrics() *MetricSet {
+	return s.opts.Metrics
 }

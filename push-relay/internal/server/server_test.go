@@ -23,6 +23,7 @@ func (f *fakeStore) List(ctx context.Context, _ string) ([]storage.Notification,
 	return nil, nil
 }
 func (f *fakeStore) Delete(ctx context.Context, _, _ string) (bool, error) { return false, nil }
+func (f *fakeStore) Stats(ctx context.Context) (storage.Stats, error)       { return storage.Stats{}, nil }
 
 func TestHealthzOK(t *testing.T) {
 	s := New(Options{Storage: &fakeStore{}, BuildTag: "test"})

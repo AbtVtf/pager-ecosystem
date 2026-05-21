@@ -1,0 +1,40 @@
+# Prometheus config for the production push-relay deploy (PUSH-009).
+#
+# Scrape interval is intentionally 15s — the StatsRefresher in the relay
+# samples queue depth every 30s, so finer scrapes don't buy fresher numbers
+# but do cost more storage. If you tighten Prometheus, also tighten
+# server.DefaultStatsInterval in lockstep.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    service: push-relay
+    env: prod
+
+rule_files:
+  - "alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  - job_name: push-relay
+    metrics_path: /metrics
+    # The relay listens on HTTPS in prod with the same cert as the public
+    # API. The Prometheus container speaks plain HTTPS with no client cert;
+    # an in-cluster scrape uses the internal DNS name `push-relay`.
+    scheme: https
+    tls_config:
+      insecure_skip_verify: false
+      # If the relay uses a private CA, mount the CA bundle into Prometheus
+      # and uncomment:
+      # ca_file: /etc/prometheus/ca.pem
+    static_configs:
+      - targets:
+          - push-relay:8443
+        labels:
+          instance: push-relay-1

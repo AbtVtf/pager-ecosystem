@@ -58,6 +58,10 @@ service logs a warning — production deployments must set them).
 | `PUSH_RELAY_MARKETPLACE_URL` | _(unset)_               | Registry root (e.g. `https://market.pageros.org`). When unset, `POST /push` returns 503 — the relay has no way to verify app signatures without it. |
 | `PUSH_RELAY_ADMIN_TOKEN` | _(unset)_                   | Bearer token for `/admin/*` (PUSH-008). Must be ≥16 chars. When unset, all admin routes return `503 Service Unavailable`. |
 
+The `/metrics` endpoint is unauthenticated. Production deploys MUST restrict
+network access to it — see [`docs/OPERATIONS.md`](./docs/OPERATIONS.md) for
+the recommended topology.
+
 ## Test
 
 ```sh
@@ -244,6 +248,45 @@ Response (`202 Accepted`):
 Status values: `accepted`, `rate_limited`, `payload_empty`,
 `payload_too_large`, `invalid_payload`, `invalid_device_pubkey`,
 `storage_error`.
+
+## What this task delivers (PUSH-009)
+
+Deployment + monitoring story for the relay (SPEC §6.6.7 / TASKS PUSH-009):
+
+- **Production compose stack.** [`docker-compose.prod.yml`](./docker-compose.prod.yml)
+  layers relay + Redis + Prometheus + Alertmanager and requires the operator
+  to provide TLS, marketplace URL, admin token, and Redis passwords via env.
+  The dev stack (`docker-compose.yml`) is untouched.
+- **Production Redis config.** [`redis/redis.conf`](./redis/redis.conf) turns
+  on AOF + RDB persistence, sets `maxmemory-policy noeviction` (the relay's
+  Lua script already enforces queue caps), and documents the ACL split
+  between the `relay` and `ops` users.
+- **Prometheus surface.** New `GET /metrics` endpoint exposes uptime,
+  storage health, per-result request counters, and queue-depth gauges. The
+  exposition is hand-rolled — see `internal/metrics/` — so the relay's
+  `go.mod` does not grow new deps. Scrape config in
+  [`deploy/prometheus/prometheus.yml`](./deploy/prometheus/prometheus.yml).
+- **Background queue sampler.** `server.NewStatsRefresher` runs every 30s
+  (`DefaultStatsInterval`) and updates `push_relay_queue_devices`,
+  `push_relay_queue_entries`, `push_relay_queue_depth_max`, and
+  `push_relay_storage_up` so `/metrics` scrapes never trigger Redis scans.
+- **Alert rules.** [`deploy/prometheus/alerts.yml`](./deploy/prometheus/alerts.yml)
+  covers uptime (`PushRelayDown`), storage (`PushRelayStorageDown`), queue
+  backlog (`PushRelayQueueBacklog` and `PushRelayQueueStuck`), and 5xx
+  error rate. Routing template in
+  [`deploy/alertmanager/alertmanager.yml`](./deploy/alertmanager/alertmanager.yml).
+- **Operator runbook.** [`docs/OPERATIONS.md`](./docs/OPERATIONS.md) covers
+  deploy topology, the metric reference, alert-response playbooks, capacity
+  model, and routine ops (deploys, drains, admin dashboard).
+- **Key rotation procedure.** [`docs/KEY-ROTATION.md`](./docs/KEY-ROTATION.md)
+  covers TLS cert, admin bearer token, and Redis ACL password rotations
+  step-by-step, plus the explicit out-of-scope list pointing at the
+  marketplace and firmware for app/device key rotations.
+
+Production deployment of the relay to `push.pageros.org` itself requires
+operator credentials (DNS, CA, hosting) that this subsystem does not own;
+the artifacts above are what an operator runs to discharge the
+"deployed to production hosting" acceptance.
 
 ## What this task delivers (PUSH-008)
 
