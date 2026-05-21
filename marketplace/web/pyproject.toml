@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pageros-marketplace-web"
+version = "0.1.0"
+description = "PagerOS marketplace public web UI (browse, search, app detail)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "TBD" }
+authors = [{ name = "PagerOS maintainers" }]
+dependencies = [
+  "fastapi>=0.110,<1",
+  "pageros-marketplace",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "httpx>=0.27,<1",
+]
+serve = [
+  "uvicorn[standard]>=0.27,<1",
+]
+
+[project.scripts]
+pageros-marketplace-web = "pageros_marketplace_web.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pageros_marketplace_web*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
