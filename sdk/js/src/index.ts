@@ -16,6 +16,8 @@ export type {
 export {
   encodeFrame,
   decodeFrame,
+  bytesToHex,
   CborDecodeError,
   CborEncodeError,
+  CborFloat,
 } from "./codec.js";
