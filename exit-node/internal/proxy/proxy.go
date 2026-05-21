@@ -140,6 +140,15 @@ type Config struct {
 	// payload to the caller as a successful Response (the loop sends it
 	// back over LoRa unchanged). EXIT-004 / SPEC.md §11.2.
 	RateLimiter RateLimiter
+
+	// Cache, if non-nil, holds successful upstream responses keyed by
+	// (URL + sha256(body)) for the upstream's stated `Cache-Control:
+	// max-age`. Repeat requests for the same (URL, body) within the TTL
+	// are served from the cache without touching the upstream — popular
+	// shared content (e.g. a weather frame fetched by many devices in
+	// the same minute) costs the exit-node one upstream call. SPEC §6.5
+	// / EXIT-006.
+	Cache ResponseCache
 }
 
 // Proxy implements lora.Handler.
@@ -149,6 +158,7 @@ type Proxy struct {
 	userAgent string
 	logger    *log.Logger
 	limiter   RateLimiter
+	cache     ResponseCache
 }
 
 // New builds a Proxy. Defaults are filled per the constants above.
@@ -180,6 +190,7 @@ func New(cfg Config) *Proxy {
 		userAgent: cfg.UserAgent,
 		logger:    cfg.Logger,
 		limiter:   cfg.RateLimiter,
+		cache:     cfg.Cache,
 	}
 }
 
@@ -225,6 +236,18 @@ func (p *Proxy) Handle(ctx context.Context, req lora.Request) (lora.Response, er
 		}
 	}
 
+	// EXIT-006: cache lookup keyed by (URL + sha256(body)). A hit short-
+	// circuits the upstream call — popular shared content (a weather
+	// frame fetched by many devices in the same minute) costs us one
+	// upstream call per cache-window.
+	var ckey string
+	if p.cache != nil {
+		ckey = cacheKey(inner.To, req.Body)
+		if cached, ok := p.cache.Get(ckey); ok {
+			return lora.Response{Body: cached}, nil
+		}
+	}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, inner.To, bytes.NewReader(req.Body))
 	if err != nil {
 		return lora.Response{}, fmt.Errorf("%w: %v", ErrBuildRequest, err)
@@ -259,6 +282,12 @@ func (p *Proxy) Handle(ctx context.Context, req lora.Request) (lora.Response, er
 	// owns its error semantics. We log but pass through.
 	if resp.StatusCode/100 != 2 {
 		p.logf("upstream %s -> %d (%d bytes), passing through", inner.To, resp.StatusCode, len(body))
+	} else if p.cache != nil && ckey != "" {
+		// Only cache 2xx so we don't memoise transient app failures.
+		policy := ParseCacheControl(resp.Header.Get("Cache-Control"))
+		if !policy.NoStore && policy.MaxAge > 0 {
+			p.cache.Put(ckey, body, policy.MaxAge)
+		}
 	}
 
 	return lora.Response{Body: body}, nil
