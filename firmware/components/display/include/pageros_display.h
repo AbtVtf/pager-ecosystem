@@ -27,18 +27,7 @@ extern "C" {
 #endif
 
 #define PAGEROS_DISPLAY_WIDTH    480
-
-// ST7796 native landscape buffer is 480x320; the LILYGO Pager's visible
-// window is the upper 222 rows (UI area) but the controller still has 320
-// rows of internal RAM. If we only fill 222 rows of the panel, the bottom
-// 98 rows show stale content from whatever was on the panel before
-// (factory firmware, bootloader splash). Allocate + present the full
-// 480x320 region so the panel is fully under our control; the widget
-// renderer keeps drawing in the 480x222 layout area and the unused rows
-// stay at the boot fill color.
-#define PAGEROS_DISPLAY_PANEL_H  320
-#define PAGEROS_DISPLAY_HEIGHT   PAGEROS_DISPLAY_PANEL_H
-#define PAGEROS_DISPLAY_UI_H     222   // logical UI height (SPEC §4)
+#define PAGEROS_DISPLAY_HEIGHT   222
 #define PAGEROS_DISPLAY_BPP      2   // RGB565 = 2 bytes per pixel
 #define PAGEROS_DISPLAY_FB_BYTES \
     ((size_t)PAGEROS_DISPLAY_WIDTH * PAGEROS_DISPLAY_HEIGHT * PAGEROS_DISPLAY_BPP)

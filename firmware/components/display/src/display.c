@@ -144,7 +144,13 @@ esp_err_t pageros_display_init(void)
 
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = DISP_PIN_RST,
-        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
+        // Per the LILYGO T-LoRa Pager variant rotation config table
+        // (LilyGoLib `LilyGo_LoRa_Pager.cpp` `rotation_config[]`), the
+        // landscape MADCTL is 0xE8 = MY|MX|MV|BGR. Element order BGR
+        // tells the ST7796 controller to swap R/B before mapping to the
+        // panel's physical color filters — without it everything comes
+        // out red-shifted (or, after our wire byte-swap, green-shifted).
+        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_BGR,
         .bits_per_pixel = 16,
     };
     ESP_RETURN_ON_ERROR(
@@ -153,10 +159,22 @@ esp_err_t pageros_display_init(void)
 
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_state.panel), TAG, "reset");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_state.panel),  TAG, "panel init");
-    // Landscape: swap XY, then mirror the X axis so (0,0) is top-left
-    // of the case-up orientation matching the keyboard.
+    // Landscape (MADCTL = 0xE8 = MY|MX|MV|BGR per LILYGO authoritative
+    // config). BGR is set on the panel_dev_config above; the other
+    // three bits come from swap_xy + mirror(true, true).
     ESP_RETURN_ON_ERROR(esp_lcd_panel_swap_xy(s_state.panel, true), TAG, "swap");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_state.panel, true, false), TAG, "mirror");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_state.panel, true, true), TAG, "mirror");
+    // The LILYGO panel's visible window starts at controller row 49,
+    // not row 0 (the ST7796 internal buffer is 320x480 but only 222
+    // rows are wired to physical pixels, centered with a 49-row offset
+    // in landscape). Without this gap, our 0..221 writes land on
+    // controller rows 0..221 — the top 49 fall above the visible area
+    // and the bottom 49 of the panel show stale content from before
+    // our boot. (Source: LilyGoLib rotation_config[1] = {0x48, ...,
+    // 49, 0} for the equivalent portrait rotation; landscape uses
+    // {0, 49}.)
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_set_gap(s_state.panel, 0, 49),
+                        TAG, "gap");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_state.panel, true),
                         TAG, "invert");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_state.panel, true),
