@@ -22,6 +22,7 @@
 #include "pageros_input.h"
 #include "pageros_input_router.h"
 #include "pageros_keyboard.h"
+#include "pageros_network.h"
 #include "pageros_storage.h"
 #include "selftest.h"
 
@@ -127,6 +128,16 @@ void app_main(void)
     if (sd_err != ESP_OK) {
         ESP_LOGW(TAG, "SD mount failed: %s — proceeding without SD",
                  esp_err_to_name(sd_err));
+    }
+
+    // Wi-Fi station bring-up (FW-009). We init the radio so the HTTPS
+    // client and the shell's settings flow can both reach the API; the
+    // actual `pageros_wifi_connect(ssid, pwd, ...)` call is owned by
+    // the shell once it has credentials in NVS — there's no SSID source
+    // here yet (FW-029 owns the Wi-Fi config UX).
+    esp_err_t wifi_err = pageros_wifi_init();
+    if (wifi_err != ESP_OK) {
+        ESP_LOGW(TAG, "wifi init failed: %s", esp_err_to_name(wifi_err));
     }
 
     // GPS bring-up (FW-011). Soft-fails: if the receiver isn't present

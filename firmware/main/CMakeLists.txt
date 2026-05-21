@@ -9,6 +9,7 @@ idf_component_register(
         input_router
         identity
         storage
+        network
         nvs_flash
         app_update
         esp_hw_support

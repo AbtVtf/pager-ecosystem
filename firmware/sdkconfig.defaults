@@ -46,3 +46,11 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # --- FreeRTOS ---
 CONFIG_FREERTOS_HZ=1000
+
+# --- TLS (FW-009 Wi-Fi + HTTPS) ---
+# Attach ESP-IDF's bundled Mozilla CA roots so esp_http_client validates
+# every public App Server certificate without per-cert pinning. The
+# FULL bundle covers all Mozilla NSS roots (~63 KB ROM hit) which is
+# the right default since PagerOS apps can be hosted anywhere.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
