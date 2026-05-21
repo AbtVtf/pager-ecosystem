@@ -29,6 +29,17 @@ import {
   verifyRequest,
   type VerifyRequestOptions,
 } from "./signing.js";
+import {
+  AppKeypair,
+  AEAD_NONCE_LEN,
+  EncryptionError,
+  HEADER_ENCRYPTED,
+  HEADER_NONCE,
+  HEADER_SENDER,
+  InvalidEncryptionHeader,
+  MissingEncryptionHeader,
+  X25519_KEY_LEN,
+} from "./encryption.js";
 
 export type { Frame, Widget, Action } from "./frame.js";
 
@@ -48,6 +59,12 @@ export interface Ctx {
   deviceId: Uint8Array | null;
   session: Record<string, unknown> | null;
   timestamp: number | null;
+  /**
+   * Verified X25519 pubkey of the request sender, populated when an
+   * `AppKeypair` is configured on the App and the request arrives with
+   * `PagerOS-Encrypted: 1`. `null` otherwise.
+   */
+  senderId: Uint8Array | null;
 }
 
 export class Response {
@@ -86,6 +103,13 @@ export interface AppOptions {
   name?: string;
   loraCompatible?: boolean;
   verifySignature?: SignatureVerification;
+  /**
+   * X25519 keypair the app publishes for inbound encrypted requests
+   * (SPEC §6.2.2 / §6.6.3). When set, requests with `PagerOS-Encrypted: 1`
+   * are decrypted transparently before signature verification + CBOR
+   * decode. Requests without the encryption flag pass through untouched.
+   */
+  keypair?: AppKeypair;
 }
 
 interface DispatchResult {
@@ -115,12 +139,14 @@ export class App {
   readonly name: string;
   readonly loraCompatible: boolean;
   readonly verifySignature: SignatureVerification;
+  readonly keypair: AppKeypair | null;
   private readonly routes = new Map<RouteKey, Handler>();
 
   constructor(opts: AppOptions = {}) {
     this.name = opts.name ?? "pageros-app";
     this.loraCompatible = opts.loraCompatible ?? false;
     this.verifySignature = opts.verifySignature ?? false;
+    this.keypair = opts.keypair ?? null;
   }
 
   // -- registration ---------------------------------------------------------
@@ -204,7 +230,32 @@ export class App {
       return this.errorResponse(404, `Not found: ${methodNorm} ${routePath}`);
     }
 
-    const rawBody = opts.body;
+    let rawBody = opts.body;
+    let senderId: Uint8Array | null = null;
+
+    // Transparent decryption: when the request advertises
+    // `PagerOS-Encrypted: 1` and an `AppKeypair` is configured, swap the
+    // ciphertext body for the decrypted plaintext before signature
+    // verification (the device signs the *inner* plaintext via the
+    // separate `PagerOS-Sig` header — SPEC §6.2.2 / §7.3.1).
+    if (this.encryptionRequested(headerMap)) {
+      try {
+        const decryption = this.decryptIncoming(headerMap, rawBody);
+        rawBody = decryption.plaintext;
+        senderId = decryption.senderId;
+      } catch (err) {
+        if (err instanceof MissingEncryptionHeader || err instanceof InvalidEncryptionHeader) {
+          return this.errorResponse(400, `${err.name}: ${err.message}`);
+        }
+        if (err instanceof EncryptionError) {
+          // Bad ciphertext → 401, mirroring Python's behaviour.
+          return this.errorResponse(401, `${err.name}: ${err.message}`, {
+            "WWW-Authenticate": `PagerOS-Sig realm="${this.name}"`,
+          });
+        }
+        throw err;
+      }
+    }
 
     // Signature verification short-circuits ahead of the CBOR body decode
     // and the handler invocation. The signing input includes the raw
@@ -252,6 +303,7 @@ export class App {
       deviceId: verifiedDeviceId ?? parseDeviceHeader(headerMap),
       session: opts.session ?? null,
       timestamp: signedTimestamp ?? parseTimestampHeader(headerMap),
+      senderId,
     };
 
     const request: Request = {
@@ -401,6 +453,37 @@ export class App {
     return { status, headers: extraHeaders, body: encoded };
   }
 
+  private encryptionRequested(headers: Record<string, string>): boolean {
+    const flag = headers[HEADER_ENCRYPTED.toLowerCase()];
+    if (flag === undefined) return false;
+    const v = flag.trim().toLowerCase();
+    return v !== "" && v !== "0" && v !== "false" && v !== "no";
+  }
+
+  private decryptIncoming(
+    headers: Record<string, string>,
+    rawBody: Uint8Array | undefined,
+  ): { plaintext: Uint8Array; senderId: Uint8Array } {
+    if (this.keypair === null) {
+      throw new InvalidEncryptionHeader(
+        `${HEADER_ENCRYPTED}: app has no keypair configured`,
+      );
+    }
+    const senderB64 = headers[HEADER_SENDER.toLowerCase()];
+    const nonceB64 = headers[HEADER_NONCE.toLowerCase()];
+    if (senderB64 === undefined) {
+      throw new MissingEncryptionHeader(`missing ${HEADER_SENDER}`);
+    }
+    if (nonceB64 === undefined) {
+      throw new MissingEncryptionHeader(`missing ${HEADER_NONCE}`);
+    }
+    const sender = decodeB64UrlExact(senderB64, HEADER_SENDER, X25519_KEY_LEN);
+    const nonce = decodeB64UrlExact(nonceB64, HEADER_NONCE, AEAD_NONCE_LEN);
+    const ciphertext = rawBody ?? new Uint8Array(0);
+    const plaintext = this.keypair.decryptFrom(sender, ciphertext, nonce);
+    return { plaintext, senderId: sender };
+  }
+
   private unauthorised(error: SignatureError): DispatchResult {
     // Per SPEC §7.4 a 401 surfaces as "Sign-in required" on the device
     // after one retry. The error frame body identifies the failure
@@ -460,6 +543,25 @@ function parseDeviceHeader(headers: Record<string, string>): Uint8Array | null {
   } catch {
     return null;
   }
+}
+
+function decodeB64UrlExact(
+  value: string,
+  field: string,
+  expectedLen: number,
+): Uint8Array {
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(value, "base64url");
+  } catch (err) {
+    throw new InvalidEncryptionHeader(`${field}: not valid base64url (${(err as Error).message})`);
+  }
+  if (buf.length !== expectedLen) {
+    throw new InvalidEncryptionHeader(
+      `${field}: expected ${expectedLen} bytes, got ${buf.length}`,
+    );
+  }
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
 function parseTimestampHeader(headers: Record<string, string>): number | null {

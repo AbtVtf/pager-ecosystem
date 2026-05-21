@@ -42,3 +42,24 @@ export {
   verifyRequest,
 } from "./signing.js";
 export type { VerifiedRequest, VerifyRequestOptions, SignRequestOptions } from "./signing.js";
+export {
+  AppKeypair,
+  AEAD_KEY_LEN,
+  AEAD_NONCE_LEN,
+  AEAD_TAG_LEN,
+  HEADER_ENCRYPTED,
+  HEADER_NONCE,
+  HEADER_SENDER,
+  HKDF_INFO,
+  HKDF_SALT,
+  X25519_KEY_LEN,
+  EncryptionError,
+  DecryptionError,
+  InvalidEncryptionHeader,
+  MissingEncryptionHeader,
+  buildNonce,
+  decrypt,
+  deriveSessionKey,
+  encrypt,
+  x25519SharedSecret,
+} from "./encryption.js";
