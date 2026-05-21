@@ -1,4 +1,9 @@
-// PROTO-003 vector conformance harness (JS-002 acceptance).
+// PROTO-003 vector conformance harness (JS-002 + JS-012 acceptance).
+//
+// JS-012 acceptance: `npm test` passes with the conformance runner
+// reporting 100%. This file plus the rest of `test/*.test.ts` is the
+// runner — it walks every published test vector, asserts the JS codec
+// round-trips them, and is wired into CI via `.github/workflows/jssdk-ci.yml`.
 //
 // Walks `protocol/test-vectors/ui/vectors/*.json` and runs every vector
 // through the codec:
