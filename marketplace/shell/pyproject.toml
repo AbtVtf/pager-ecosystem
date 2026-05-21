@@ -1,0 +1,16 @@
+[project]
+name = "pageros-marketplace-shell"
+version = "0.0.1"
+description = "PagerOS marketplace in-device app drawer (MKT-005)."
+requires-python = ">=3.11"
+dependencies = [
+  "pageros>=0.0.1",
+  "pageros-marketplace>=0.0.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["app"]
