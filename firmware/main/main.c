@@ -22,6 +22,7 @@
 #include "pageros_input.h"
 #include "pageros_input_router.h"
 #include "pageros_keyboard.h"
+#include "pageros_storage.h"
 #include "selftest.h"
 
 static const char *TAG = "pageros";
@@ -116,6 +117,16 @@ void app_main(void)
     if (id_err != ESP_OK) {
         ESP_LOGE(TAG, "identity init failed: %s — continuing without "
                       "stable identity", esp_err_to_name(id_err));
+    }
+
+    // Storage mount (FW-003). Creates the §7.4 directory tree on first
+    // boot. Soft-fails — the shell renders a recovery screen when no
+    // card is present (SPEC §7.2 step 4 + docs/user/troubleshooting),
+    // and that's a shell-level concern, not the storage driver's.
+    esp_err_t sd_err = pageros_storage_init();
+    if (sd_err != ESP_OK) {
+        ESP_LOGW(TAG, "SD mount failed: %s — proceeding without SD",
+                 esp_err_to_name(sd_err));
     }
 
     // GPS bring-up (FW-011). Soft-fails: if the receiver isn't present
