@@ -1,0 +1,2 @@
+pageros>=0.0.1
+pynacl>=1.5
