@@ -24,13 +24,15 @@
 //! Tests live next to the code and use a tiny inline `std::net` server
 //! so we don't depend on an external mock framework.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE, USER_AGENT};
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::network_log::{Body as LogBody, Header as LogHeader, NetworkLog, TRANSPORT_DIRECT};
 
 /// Default app-server base URL. Matches `SPEC.md` §6.1 (SIM-004 accepts)
 /// — `pagerctl dev` listens here, and so do the example apps in
@@ -126,6 +128,11 @@ impl DirectError {
 pub struct DirectClient {
     http: Client,
     inner: Mutex<Inner>,
+    /// Optional network log. When present, every request/response (or
+    /// transport error) is appended here for the SIM-005 panel. The log
+    /// is owned by the Tauri app and shared with the client; using
+    /// `Arc<NetworkLog>` keeps the client cloneable without the log.
+    network_log: Option<Arc<NetworkLog>>,
 }
 
 #[derive(Debug, Default)]
@@ -151,6 +158,13 @@ const MAX_HISTORY: usize = 64;
 
 impl DirectClient {
     pub fn new() -> Self {
+        Self::with_log(None)
+    }
+
+    /// Build a client that records every exchange into `log`. Used by
+    /// the Tauri runtime so the network panel can read what went over
+    /// the wire; tests typically call [`Self::new`] and skip the log.
+    pub fn with_log(network_log: Option<Arc<NetworkLog>>) -> Self {
         let http = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .user_agent(USER_AGENT_VALUE)
@@ -159,6 +173,7 @@ impl DirectClient {
         Self {
             http,
             inner: Mutex::new(Inner::default()),
+            network_log,
         }
     }
 
@@ -260,6 +275,16 @@ impl DirectClient {
             headers.insert(CONTENT_TYPE, HeaderValue::from_static(CONTENT_TYPE_VALUE));
         }
 
+        let pending = self.network_log.as_ref().map(|log| {
+            log.begin(
+                TRANSPORT_DIRECT,
+                method_label(method),
+                url.as_str(),
+                snapshot_headers(&headers),
+                body.map(LogBody::from_slice).unwrap_or_else(LogBody::empty),
+            )
+        });
+
         let mut builder = self
             .http
             .request(Method::from(method), url.clone())
@@ -268,17 +293,44 @@ impl DirectClient {
             builder = builder.body(b.to_vec());
         }
 
-        let response = builder.send().await.map_err(map_reqwest_error)?;
+        let response = match builder.send().await {
+            Ok(r) => r,
+            Err(err) => {
+                let mapped = map_reqwest_error(err);
+                if let (Some(p), Some(log)) = (pending, self.network_log.as_ref()) {
+                    log.finish_error(p, mapped.kind(), &mapped.to_string());
+                }
+                return Err(mapped);
+            }
+        };
         let status = response.status();
+        let response_headers = snapshot_response_headers(response.headers());
         let content_type = response
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let body = response.bytes().await.map_err(map_reqwest_error)?.to_vec();
+        let body_bytes = match response.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(err) => {
+                let mapped = map_reqwest_error(err);
+                if let (Some(p), Some(log)) = (pending, self.network_log.as_ref()) {
+                    log.finish_error(p, mapped.kind(), &mapped.to_string());
+                }
+                return Err(mapped);
+            }
+        };
+        if let (Some(p), Some(log)) = (pending, self.network_log.as_ref()) {
+            log.finish_response(
+                p,
+                status.as_u16(),
+                response_headers,
+                LogBody::from_slice(&body_bytes),
+            );
+        }
         Ok(Response {
             status: status.as_u16(),
-            body,
+            body: body_bytes,
             content_type,
             resolved_url: url.to_string(),
         })
@@ -314,6 +366,40 @@ fn parse_base(raw: &str) -> Result<Url, DirectError> {
         url.set_path(&new_path);
     }
     Ok(url)
+}
+
+fn method_label(method: HttpMethod) -> &'static str {
+    match method {
+        HttpMethod::Get => "GET",
+        HttpMethod::Post => "POST",
+    }
+}
+
+fn snapshot_headers(headers: &HeaderMap) -> Vec<LogHeader> {
+    headers
+        .iter()
+        .map(|(k, v)| LogHeader {
+            name: k.as_str().to_string(),
+            value: header_value_to_string(v),
+        })
+        .collect()
+}
+
+fn snapshot_response_headers(headers: &reqwest::header::HeaderMap) -> Vec<LogHeader> {
+    headers
+        .iter()
+        .map(|(k, v): (&HeaderName, &HeaderValue)| LogHeader {
+            name: k.as_str().to_string(),
+            value: header_value_to_string(v),
+        })
+        .collect()
+}
+
+fn header_value_to_string(v: &HeaderValue) -> String {
+    match v.to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => format!("(binary {} bytes)", v.as_bytes().len()),
+    }
 }
 
 fn map_reqwest_error(err: reqwest::Error) -> DirectError {
@@ -710,5 +796,64 @@ mod tests {
         let s = client.state();
         assert!(s.current_url.is_some());
         assert_eq!(s.history_depth, 0);
+    }
+
+    #[test]
+    fn network_log_records_successful_exchange() {
+        let server = OneShotServer::spawn(OK_CBOR_RESPONSE);
+        let log = Arc::new(NetworkLog::new());
+        let client = DirectClient::with_log(Some(log.clone()));
+        client.set_base_url(&server.addr).unwrap();
+        let body = b"\x82\x01\x02".to_vec();
+        run(client.fetch(Request {
+            method: HttpMethod::Post,
+            path: "/widget",
+            body: Some(&body),
+        }))
+        .unwrap();
+        server.captured();
+
+        let snap = log.snapshot();
+        assert_eq!(snap.len(), 1, "expected one exchange recorded");
+        let ex = &snap[0];
+        assert_eq!(ex.transport, "direct");
+        assert_eq!(ex.method, "POST");
+        assert!(ex.url.ends_with("/widget"));
+        assert_eq!(ex.request_body.bytes, body);
+        assert!(ex.request_headers.iter().any(|h| h.name.eq_ignore_ascii_case("content-type")));
+        match &ex.outcome {
+            crate::network_log::Outcome::Response { status, response_body, response_headers } => {
+                assert_eq!(*status, 200);
+                assert_eq!(response_body.bytes, b"hello");
+                assert!(response_headers
+                    .iter()
+                    .any(|h| h.name.eq_ignore_ascii_case("content-type")));
+            }
+            other => panic!("expected response outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn network_log_records_transport_failure() {
+        let log = Arc::new(NetworkLog::new());
+        let client = DirectClient::with_log(Some(log.clone()));
+        client.set_base_url("http://127.0.0.1:1/").unwrap();
+        let err = run(client.fetch(Request {
+            method: HttpMethod::Get,
+            path: "/x",
+            body: None,
+        }))
+        .unwrap_err();
+        assert_eq!(err.kind(), "transport");
+
+        let snap = log.snapshot();
+        assert_eq!(snap.len(), 1);
+        match &snap[0].outcome {
+            crate::network_log::Outcome::Error { error_kind, message } => {
+                assert_eq!(error_kind, "transport");
+                assert!(!message.is_empty());
+            }
+            other => panic!("expected error outcome, got {other:?}"),
+        }
     }
 }

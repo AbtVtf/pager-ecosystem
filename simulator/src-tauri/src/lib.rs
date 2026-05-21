@@ -12,6 +12,7 @@
 
 pub mod direct;
 pub mod input;
+pub mod network_log;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use serde::Serialize;
 
 use crate::direct::{DirectClient, DirectState, HttpMethod, Request as DirectRequest};
 use crate::input::{map_host_key, HostKey, InputEvent};
+use crate::network_log::{pretty_print_cbor, Exchange, NetworkLog};
 
 #[derive(Serialize)]
 pub struct RenderResult {
@@ -296,6 +298,55 @@ async fn direct_fetch(
     })
 }
 
+/// Network-panel detail view. Mirrors a single captured exchange and
+/// adds pretty-printed CBOR for whichever side actually carried CBOR
+/// (request body for POSTs, response body when present). Hex preview
+/// of the raw bytes is computed in the frontend so the wire shape
+/// stays compact.
+#[derive(Serialize)]
+pub struct NetworkExchangeDetail {
+    #[serde(flatten)]
+    pub exchange: Exchange,
+    /// Multi-line diagnostic notation for the request body, or `None`
+    /// when the request had no body.
+    pub request_decoded: Option<String>,
+    /// Multi-line diagnostic notation for the response body, or `None`
+    /// when the exchange ended in a transport error.
+    pub response_decoded: Option<String>,
+}
+
+/// Most-recent-first list of captured exchanges. The panel uses this
+/// to populate its dropdown; full bodies live in `network_exchange`.
+#[tauri::command]
+fn network_exchanges(log: tauri::State<'_, Arc<NetworkLog>>) -> Vec<Exchange> {
+    log.snapshot()
+}
+
+#[tauri::command]
+fn network_exchange(
+    id: u64,
+    log: tauri::State<'_, Arc<NetworkLog>>,
+) -> Option<NetworkExchangeDetail> {
+    let ex = log.get(id)?;
+    let request_decoded = if ex.request_body.bytes.is_empty() {
+        None
+    } else {
+        Some(pretty_print_cbor(&ex.request_body.bytes))
+    };
+    let response_decoded = match &ex.outcome {
+        network_log::Outcome::Response { response_body, .. } => {
+            Some(pretty_print_cbor(&response_body.bytes))
+        }
+        network_log::Outcome::Error { .. } => None,
+    };
+    Some(NetworkExchangeDetail { exchange: ex, request_decoded, response_decoded })
+}
+
+#[tauri::command]
+fn network_clear(log: tauri::State<'_, Arc<NetworkLog>>) {
+    log.clear();
+}
+
 /// Navigate one entry back in the direct-mode history stack. Returns
 /// `None` if history is empty so the frontend can decide whether to
 /// route to the Shell (per `SPEC.md` §5.6.2: BACK from app root → Shell).
@@ -317,9 +368,12 @@ async fn direct_back(
 }
 
 pub fn run() {
+    let network_log = Arc::new(NetworkLog::new());
+    let direct_client = Arc::new(DirectClient::with_log(Some(network_log.clone())));
     tauri::Builder::default()
         .manage(Mutex::new(InputState::default()))
-        .manage(Arc::new(DirectClient::new()))
+        .manage(direct_client)
+        .manage(network_log)
         .invoke_handler(tauri::generate_handler![
             render_vector,
             render_cbor_hex,
@@ -330,6 +384,9 @@ pub fn run() {
             direct_state,
             direct_fetch,
             direct_back,
+            network_exchanges,
+            network_exchange,
+            network_clear,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

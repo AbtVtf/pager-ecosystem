@@ -120,6 +120,117 @@
       }
       #addrbar button:hover { background: #2a3a5a; }
       #addrbar .mode { color: #8be1ff; }
+
+      /* SIM-005 — Network panel. Overlay on top of the device screen so
+         the engineer can review what went over the wire without leaving
+         the simulator window. Alt+N toggles. Two columns:
+         left = exchange list, right = detail (request / response /
+         decoded CBOR). */
+      #netpanel {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.96);
+        color: #d0d0d0;
+        font-size: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        display: none;
+        flex-direction: column;
+        z-index: 20;
+      }
+      #netpanel.open { display: flex; }
+      #netpanel header {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 4px;
+        border-bottom: 1px solid #333;
+        background: #0a0a0a;
+      }
+      #netpanel header .title { color: #8be1ff; }
+      #netpanel header .spacer { flex: 1; }
+      #netpanel header button {
+        font: inherit;
+        color: #d0d0d0;
+        background: #222;
+        border: 1px solid #444;
+        padding: 0 6px;
+        cursor: pointer;
+      }
+      #netpanel header button:hover { background: #2a3a5a; }
+      #netpanel .body {
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+      }
+      #netlist {
+        flex: 0 0 180px;
+        overflow-y: auto;
+        border-right: 1px solid #222;
+      }
+      #netlist .row {
+        padding: 1px 4px;
+        white-space: nowrap;
+        cursor: pointer;
+        border-bottom: 1px dotted #222;
+        text-overflow: ellipsis;
+        overflow: hidden;
+      }
+      #netlist .row:hover { background: #103060; }
+      #netlist .row.selected { background: #1a3a6a; color: #fff; }
+      #netlist .row.err { color: #ff8080; }
+      #netlist .empty {
+        padding: 6px 4px;
+        color: rgba(255, 255, 255, 0.45);
+        font-style: italic;
+      }
+      #netdetail {
+        flex: 1;
+        overflow-y: auto;
+        padding: 2px 4px;
+      }
+      #netdetail .placeholder {
+        padding: 6px 4px;
+        color: rgba(255, 255, 255, 0.45);
+        font-style: italic;
+      }
+      #netdetail .kv {
+        display: grid;
+        grid-template-columns: 90px 1fr;
+        gap: 0 6px;
+        margin: 2px 0 4px;
+      }
+      #netdetail .kv .k { color: #8be1ff; }
+      #netdetail .kv .v { word-break: break-all; }
+      #netdetail h4 {
+        margin: 4px 0 2px;
+        font-size: 10px;
+        color: #ffc870;
+        border-top: 1px solid #222;
+        padding-top: 2px;
+      }
+      #netdetail .hdrs {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        column-gap: 6px;
+      }
+      #netdetail .hdrs .hn { color: #b0c0d0; }
+      #netdetail .hdrs .hv { word-break: break-all; }
+      #netdetail pre {
+        margin: 2px 0 4px;
+        padding: 3px 4px;
+        background: #050a0f;
+        border: 1px solid #1c2a3a;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 140px;
+        overflow: auto;
+        font-size: 9px;
+      }
+      #netdetail .truncated {
+        color: #ffc870;
+        font-style: italic;
+      }
     </style>
   </head>
   <body>
@@ -131,9 +242,22 @@
       <button id="addr-go">Go</button>
       <button id="addr-close">×</button>
     </div>
+    <div id="netpanel" role="dialog" aria-label="SIM-005 network panel">
+      <header>
+        <span class="title">network</span>
+        <span id="net-summary" class="spacer">no exchanges yet</span>
+        <button id="net-refresh" title="reload list">↻</button>
+        <button id="net-clear" title="clear log">clear</button>
+        <button id="net-close" title="close (Alt+N)">×</button>
+      </header>
+      <div class="body">
+        <div id="netlist" role="listbox" aria-label="recent exchanges"></div>
+        <div id="netdetail"><div class="placeholder">select an exchange on the left</div></div>
+      </div>
+    </div>
     <div id="input-feed"></div>
     <div id="status">…</div>
-    <div id="hint">Alt+J/K vectors · Alt+P picker · Alt+G direct · Alt+R reload · Esc=BACK · arrows=encoder</div>
+    <div id="hint">Alt+J/K vectors · Alt+P picker · Alt+G direct · Alt+N net · Alt+R reload · Esc=BACK · arrows=encoder</div>
     <script type="module">
       const { invoke } = window.__TAURI__.core;
 
@@ -146,6 +270,13 @@
       const addrUrl = document.getElementById('addr-url');
       const addrGo = document.getElementById('addr-go');
       const addrClose = document.getElementById('addr-close');
+      const netpanel = document.getElementById('netpanel');
+      const netlist = document.getElementById('netlist');
+      const netdetail = document.getElementById('netdetail');
+      const netSummary = document.getElementById('net-summary');
+      const netRefresh = document.getElementById('net-refresh');
+      const netClearBtn = document.getElementById('net-clear');
+      const netCloseBtn = document.getElementById('net-close');
 
       let vectors = [];
       let index = 0;
@@ -248,6 +379,11 @@
         const ct = result.content_type ? ` ${result.content_type}` : '';
         status.textContent =
           `${result.status}${ct} ${result.url} (${result.body_bytes}B)${errSuffix}`;
+        if (netpanel.classList.contains('open')) {
+          // Don't blow away the selection — the engineer may be reading
+          // the previous exchange while a new one lands.
+          refreshNetList({ keepSelection: true });
+        }
       }
 
       async function directGo(url) {
@@ -261,6 +397,9 @@
           await applyDirectResult(result);
         } catch (err) {
           status.textContent = `direct error: ${err}`;
+          if (netpanel.classList.contains('open')) {
+            refreshNetList({ keepSelection: true });
+          }
         }
       }
 
@@ -273,9 +412,238 @@
           }
         } catch (err) {
           status.textContent = `direct back error: ${err}`;
+          if (netpanel.classList.contains('open')) {
+            refreshNetList({ keepSelection: true });
+          }
         }
         return false;
       }
+
+      // ─────────────────────────────────────────────────────────────
+      // SIM-005 — Network panel.
+      //
+      // Reads `network_exchanges` / `network_exchange` / `network_clear`
+      // from the backend. Auto-refreshes on every direct-mode fetch so
+      // the engineer sees new traffic without manually reloading.
+      // ─────────────────────────────────────────────────────────────
+
+      let netSelectedId = null;
+      let netLastExchanges = [];
+
+      function fmtBytes(n) {
+        if (n < 1024) return `${n}B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KiB`;
+        return `${(n / 1024 / 1024).toFixed(1)}MiB`;
+      }
+
+      function hexPreview(bytes, max = 256) {
+        if (!bytes) return '';
+        const arr = Array.from(bytes);
+        const slice = arr.slice(0, max);
+        let out = '';
+        for (let i = 0; i < slice.length; i += 16) {
+          const chunk = slice.slice(i, i + 16);
+          const hex = chunk.map((b) => b.toString(16).padStart(2, '0')).join(' ');
+          const ascii = chunk
+            .map((b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '.'))
+            .join('');
+          out += `${i.toString(16).padStart(4, '0')}  ${hex.padEnd(47, ' ')}  ${ascii}\n`;
+        }
+        if (arr.length > max) {
+          out += `… ${arr.length - max} more byte(s)\n`;
+        }
+        return out;
+      }
+
+      function renderHeaders(headers) {
+        if (!headers || headers.length === 0) {
+          return '<div class="placeholder">(none)</div>';
+        }
+        return (
+          '<div class="hdrs">' +
+          headers
+            .map(
+              (h) =>
+                `<div class="hn">${escapeHtml(h.name)}:</div>` +
+                `<div class="hv">${escapeHtml(h.value)}</div>`,
+            )
+            .join('') +
+          '</div>'
+        );
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      async function refreshNetList(opts) {
+        const keepSelection = opts && opts.keepSelection;
+        try {
+          netLastExchanges = await invoke('network_exchanges');
+        } catch (err) {
+          netSummary.textContent = `network log error: ${err}`;
+          return;
+        }
+        netSummary.textContent =
+          netLastExchanges.length === 0
+            ? 'no exchanges yet'
+            : `${netLastExchanges.length} exchange(s)`;
+        netlist.innerHTML = '';
+        if (netLastExchanges.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'no traffic captured';
+          netlist.appendChild(empty);
+          netdetail.innerHTML =
+            '<div class="placeholder">select an exchange on the left</div>';
+          netSelectedId = null;
+          return;
+        }
+        for (const ex of netLastExchanges) {
+          const row = document.createElement('div');
+          const isErr = ex.outcome && ex.outcome.kind === 'error';
+          row.className = 'row' + (isErr ? ' err' : '');
+          row.dataset.id = String(ex.id);
+          const status =
+            ex.outcome.kind === 'response' ? ex.outcome.status : 'ERR';
+          row.textContent = `${status} ${ex.method} ${pathOf(ex.url)} · ${ex.latency_ms}ms`;
+          row.title = ex.url;
+          row.onclick = () => selectExchange(ex.id);
+          netlist.appendChild(row);
+        }
+        if (!keepSelection || netSelectedId == null) {
+          // Default to newest.
+          await selectExchange(netLastExchanges[0].id);
+        } else {
+          const stillThere = netLastExchanges.find((e) => e.id === netSelectedId);
+          if (stillThere) {
+            highlightSelected();
+          } else {
+            await selectExchange(netLastExchanges[0].id);
+          }
+        }
+      }
+
+      function pathOf(url) {
+        try {
+          const u = new URL(url);
+          return u.pathname + (u.search || '');
+        } catch {
+          return url;
+        }
+      }
+
+      function highlightSelected() {
+        for (const row of netlist.querySelectorAll('.row')) {
+          row.classList.toggle(
+            'selected',
+            row.dataset.id === String(netSelectedId),
+          );
+        }
+      }
+
+      async function selectExchange(id) {
+        netSelectedId = id;
+        highlightSelected();
+        let detail;
+        try {
+          detail = await invoke('network_exchange', { id });
+        } catch (err) {
+          netdetail.innerHTML = `<div class="placeholder">load error: ${escapeHtml(String(err))}</div>`;
+          return;
+        }
+        if (!detail) {
+          netdetail.innerHTML =
+            '<div class="placeholder">exchange evicted from log</div>';
+          return;
+        }
+        renderDetail(detail);
+      }
+
+      function renderDetail(d) {
+        const ex = d;
+        const ts = new Date(Number(ex.started_at_ms || 0)).toISOString().slice(11, 23);
+        const out = [];
+        out.push('<div class="kv">');
+        out.push(`<div class="k">when</div><div class="v">${escapeHtml(ts)} UTC</div>`);
+        out.push(`<div class="k">transport</div><div class="v">${escapeHtml(ex.transport)}</div>`);
+        out.push(`<div class="k">method</div><div class="v">${escapeHtml(ex.method)}</div>`);
+        out.push(`<div class="k">url</div><div class="v">${escapeHtml(ex.url)}</div>`);
+        out.push(`<div class="k">latency</div><div class="v">${ex.latency_ms} ms</div>`);
+        if (ex.outcome.kind === 'response') {
+          out.push(`<div class="k">status</div><div class="v">${ex.outcome.status}</div>`);
+        } else {
+          out.push(
+            `<div class="k">error</div><div class="v">${escapeHtml(ex.outcome.error_kind)}: ${escapeHtml(ex.outcome.message)}</div>`,
+          );
+        }
+        out.push('</div>');
+
+        out.push('<h4>request headers</h4>');
+        out.push(renderHeaders(ex.request_headers));
+
+        out.push('<h4>request body</h4>');
+        if (ex.request_body.bytes_len === 0) {
+          out.push('<div class="placeholder">(no body)</div>');
+        } else {
+          out.push(bodyBlock(ex.request_body, ex.request_decoded));
+        }
+
+        if (ex.outcome.kind === 'response') {
+          out.push('<h4>response headers</h4>');
+          out.push(renderHeaders(ex.outcome.response_headers));
+          out.push('<h4>response body</h4>');
+          if (ex.outcome.response_body.bytes_len === 0) {
+            out.push('<div class="placeholder">(no body)</div>');
+          } else {
+            out.push(bodyBlock(ex.outcome.response_body, ex.response_decoded));
+          }
+        }
+
+        netdetail.innerHTML = out.join('');
+      }
+
+      function bodyBlock(body, decoded) {
+        const totalSize = body.bytes_len;
+        const truncNote = body.truncated
+          ? `<div class="truncated">… showing first ${fmtBytes(body.bytes.length)} of ${fmtBytes(totalSize)}</div>`
+          : '';
+        const hex = hexPreview(body.bytes);
+        const dec = decoded || '';
+        return [
+          `<div class="kv"><div class="k">size</div><div class="v">${fmtBytes(totalSize)}</div></div>`,
+          truncNote,
+          '<div class="kv"><div class="k">raw (hex)</div><div class="v"></div></div>',
+          `<pre>${escapeHtml(hex)}</pre>`,
+          '<div class="kv"><div class="k">decoded</div><div class="v"></div></div>',
+          `<pre>${escapeHtml(dec || '(no decode)')}</pre>`,
+        ].join('');
+      }
+
+      function toggleNetPanel() {
+        if (netpanel.classList.contains('open')) {
+          netpanel.classList.remove('open');
+        } else {
+          netpanel.classList.add('open');
+          refreshNetList();
+        }
+      }
+
+      netRefresh.addEventListener('click', () => refreshNetList({ keepSelection: true }));
+      netClearBtn.addEventListener('click', async () => {
+        try {
+          await invoke('network_clear');
+        } catch (err) {
+          netSummary.textContent = `clear error: ${err}`;
+          return;
+        }
+        netSelectedId = null;
+        await refreshNetList();
+      });
+      netCloseBtn.addEventListener('click', () => netpanel.classList.remove('open'));
 
       addrGo.addEventListener('click', () => directGo(addrUrl.value));
       addrClose.addEventListener('click', hideAddrBar);
@@ -401,7 +769,18 @@
               }
               ev.preventDefault();
               return;
+            case 'KeyN':
+              toggleNetPanel();
+              ev.preventDefault();
+              return;
           }
+        }
+
+        // While the network panel is open, keys are for browsing the
+        // panel, not the device — let the browser handle scroll / clicks
+        // and swallow everything else.
+        if (netpanel.classList.contains('open')) {
+          return;
         }
 
         // While the address bar is open, key handling stays inside the
