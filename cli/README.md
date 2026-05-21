@@ -11,6 +11,31 @@ go build -o pagerctl ./cmd/pagerctl
 ./pagerctl version
 ```
 
+## Run your app locally (CLI-002)
+
+```sh
+pagerctl dev                                  # app.py in cwd, port 8000
+pagerctl dev --port 8001
+pagerctl dev --app examples/hello/app.py --python .venv/bin/python
+```
+
+The `dev` command spawns `python -m pageros.devserver --app <path>` (PY-009 —
+file-change auto-reload) and opens the simulator pointed at the dev server.
+One Ctrl+C stops both.
+
+Flags:
+
+- `--app <path>` — app entry (default: `app.py` in cwd).
+- `--host <host>` — dev server bind host (default: `127.0.0.1`).
+- `--port <n>` — dev server bind port (default: `8000`).
+- `--python <bin>` — Python interpreter (default: `$PAGEROS_PYTHON`, then
+  `python3` on `PATH`). Point at your venv: `--python .venv/bin/python`.
+- `--bin <path>` — simulator binary (same precedence as `pagerctl simulate`).
+- `--no-simulator` — skip the simulator (useful when connecting a real device).
+
+Requires Python with the `pageros` package importable, and the
+[PagerOS Simulator](../simulator) installed (unless `--no-simulator`).
+
 ## Simulate a remote app (CLI-003)
 
 ```sh
