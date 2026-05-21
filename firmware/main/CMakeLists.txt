@@ -7,6 +7,8 @@ idf_component_register(
         input
         keyboard
         input_router
+        identity
+        nvs_flash
         app_update
         esp_hw_support
         spi_flash

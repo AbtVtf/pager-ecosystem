@@ -15,7 +15,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "nvs_flash.h"
+
 #include "pageros_gps.h"
+#include "pageros_identity.h"
 #include "pageros_input.h"
 #include "pageros_input_router.h"
 #include "pageros_keyboard.h"
@@ -91,6 +94,29 @@ void app_main(void)
     selftest_result_t st = selftest_run();
     selftest_log_result(&st);
     selftest_halt_if_hard_fail(&st);
+
+    // NVS must be up before identity load (FW-014). If the partition is
+    // truncated or full from a prior boot we erase + re-init so first-
+    // boot identity gen still succeeds — destroying existing pageros_id
+    // state is the lesser evil vs. wedging the device.
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES
+            || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "nvs needs erase (%s); reformatting",
+                 esp_err_to_name(nvs_err));
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_err);
+
+    // Identity load (FW-014). First boot generates an Ed25519 keypair;
+    // subsequent boots load it from NVS. The seed is the only thing
+    // stored — the pubkey is derived each boot via FW-015 crypto.
+    esp_err_t id_err = pageros_identity_init();
+    if (id_err != ESP_OK) {
+        ESP_LOGE(TAG, "identity init failed: %s — continuing without "
+                      "stable identity", esp_err_to_name(id_err));
+    }
 
     // GPS bring-up (FW-011). Soft-fails: if the receiver isn't present
     // or the I2C expander mis-detects, log and continue so the rest of
