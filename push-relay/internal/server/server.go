@@ -33,6 +33,10 @@ type Options struct {
 	// (PUSH-006). When nil, the server constructs an in-memory limiter with
 	// the default 60/hour + 1000/day caps.
 	Limiter ratelimit.Limiter
+	// GroupLimiter enforces the same quotas as Limiter but for group events
+	// (SPEC §6.6.6 keeps the bucket separate from user notifications,
+	// PUSH-007). When nil, the server allocates a fresh in-memory limiter.
+	GroupLimiter ratelimit.Limiter
 }
 
 type Server struct {
@@ -52,12 +56,16 @@ func New(opts Options) *Server {
 	if opts.Limiter == nil {
 		opts.Limiter = ratelimit.NewMemory()
 	}
+	if opts.GroupLimiter == nil {
+		opts.GroupLimiter = ratelimit.NewMemory()
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", newHealthzHandler(opts.Storage, opts.BuildTag))
 	mux.Handle("GET /pull/{device_pubkey}", newPullHandler(opts.Storage, opts.Logger, 0))
 	mux.Handle("POST /push/{device_pubkey}", newPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.Limiter, opts.Logger, 0, opts.MaxPushBytes))
 	mux.Handle("DELETE /pull/{device_pubkey}/{notification_id}", newAckHandler(opts.Storage, opts.Logger, 0))
+	mux.Handle("POST /group_push", newGroupPushHandler(opts.Storage, opts.Manifest, opts.Admin, opts.GroupLimiter, opts.Logger, 0, 0, 0, 0))
 	admin.Mount(mux, admin.MountConfig{Store: opts.Admin, Token: opts.AdminToken, Logger: opts.Logger})
 
 	s := &Server{

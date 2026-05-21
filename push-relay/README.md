@@ -192,6 +192,59 @@ The limiter is wired via `server.Options.Limiter`; tests inject a
 PUSH-007 will instantiate a *second* limiter for group events (SPEC
 §6.6.6 keeps that bucket separate from user-visible notifications).
 
+## What this task delivers (PUSH-007)
+
+Group event fan-out via `POST /group_push` (`internal/server/group.go`):
+
+- Apps send a single signed JSON request listing up to
+  `DefaultMaxGroupRecipients` (64) recipients. Each carries its own
+  opaque (already-encrypted) payload; the relay never decrypts —
+  SPEC §6.6.3 / §6.2.5 keep the per-device X25519+ChaCha20-Poly1305
+  layer entirely above this service.
+- Auth + ban + sig verification mirror `POST /push` and reject the
+  whole batch on failure (`401` / `403`). The marketplace lookup
+  resolves the app pubkey, exactly the same path PUSH-002 already
+  exercises.
+- Per-recipient errors (invalid device pubkey, oversized payload,
+  rate-limit overflow) are reported *per row* in the response so a
+  single bad recipient cannot poison the rest of the batch.
+- Group events use a **separate** `ratelimit.Limiter` instance from
+  user notifications (SPEC §6.6.6 / wiring via
+  `server.Options.GroupLimiter`). Exhausting the group bucket for an
+  (app, device) tuple leaves the `/push` bucket untouched, and vice
+  versa — covered by `TestGroupPushBucketIndependentFromPushBucket`.
+- Successful enqueues are stored with `Kind = group_event` so
+  `GET /pull` surfaces the right kind to the device renderer.
+
+Request:
+
+```json
+POST /group_push
+Headers: PagerOS-App, PagerOS-Sig, PagerOS-Timestamp (as /push)
+{
+  "recipients": [
+    { "device_pubkey": "<base64url>", "payload_b64": "<base64url>" },
+    ...
+  ]
+}
+```
+
+Response (`202 Accepted`):
+
+```json
+{
+  "results": [
+    { "device_pubkey": "...", "status": "accepted", "id": "...", "enqueued_at": 1715000000 },
+    { "device_pubkey": "...", "status": "rate_limited", "retry_after": 60 },
+    { "device_pubkey": "...", "status": "invalid_device_pubkey" }
+  ]
+}
+```
+
+Status values: `accepted`, `rate_limited`, `payload_empty`,
+`payload_too_large`, `invalid_payload`, `invalid_device_pubkey`,
+`storage_error`.
+
 ## What this task delivers (PUSH-008)
 
 Admin / abuse dashboard surface in `internal/admin`:
