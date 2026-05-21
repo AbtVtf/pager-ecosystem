@@ -25,6 +25,7 @@
 #include "pageros_input_router.h"
 #include "pageros_keyboard.h"
 #include "pageros_logger.h"
+#include "pageros_lora.h"
 #include "pageros_network.h"
 #include "pageros_storage.h"
 #include "selftest.h"
@@ -144,6 +145,29 @@ void app_main(void)
     } else {
         LOG_INFO(TAG, "logger online, sd=%s",
                  pageros_logger_is_writing_to_sd() ? "yes" : "no");
+    }
+
+    // LoRa bring-up (FW-008). 868 MHz / SF7 / 125 kHz is a quiet
+    // boot-time default — actual channel choice belongs to the
+    // higher-level mesh stack (LORA-* tasks). Soft-fails so a missing
+    // SX1262 (e.g. dev board with the LoRa power gate off) doesn't
+    // block the rest of the system from booting.
+    pageros_lora_config_t lora_cfg = {
+        .band             = PAGEROS_LORA_BAND_868_MHZ,
+        .bandwidth        = PAGEROS_LORA_BW_125_KHZ,
+        .spreading_factor = 7,
+        .coding_rate      = PAGEROS_LORA_CR_4_5,
+        .tx_power_dbm     = 14,
+        .preamble_symbols = 8,
+        .explicit_header  = true,
+        .crc_on           = true,
+        .iq_inverted      = false,
+    };
+    esp_err_t lora_err = pageros_lora_init(&lora_cfg);
+    if (lora_err == ESP_OK) {
+        LOG_INFO(TAG, "LoRa ready (SX1262, 868 MHz, SF7/BW125)");
+    } else {
+        LOG_ERROR(TAG, "LoRa init failed: %s", esp_err_to_name(lora_err));
     }
 
     // Wi-Fi station bring-up (FW-009). We init the radio so the HTTPS

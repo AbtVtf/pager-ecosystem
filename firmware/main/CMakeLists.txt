@@ -9,6 +9,7 @@ idf_component_register(
         input_router
         identity
         logger
+        lora
         storage
         network
         display
