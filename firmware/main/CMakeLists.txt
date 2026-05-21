@@ -8,6 +8,7 @@ idf_component_register(
         keyboard
         input_router
         identity
+        logger
         storage
         network
         display

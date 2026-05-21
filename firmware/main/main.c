@@ -24,6 +24,7 @@
 #include "pageros_input.h"
 #include "pageros_input_router.h"
 #include "pageros_keyboard.h"
+#include "pageros_logger.h"
 #include "pageros_network.h"
 #include "pageros_storage.h"
 #include "selftest.h"
@@ -130,6 +131,19 @@ void app_main(void)
     if (sd_err != ESP_OK) {
         ESP_LOGW(TAG, "SD mount failed: %s — proceeding without SD",
                  esp_err_to_name(sd_err));
+    }
+
+    // Logger (FW-004). Initialise after storage so the first LOG_INFO
+    // line lands on /sd/logs/pageros.log; falls back to console-only
+    // when the SD mount above failed. Any earlier code paths that need
+    // a durable line can also call pageros_logger_init() again later —
+    // it's idempotent and will pick up SD the moment it appears.
+    esp_err_t log_err = pageros_logger_init();
+    if (log_err != ESP_OK) {
+        ESP_LOGW(TAG, "logger init failed: %s", esp_err_to_name(log_err));
+    } else {
+        LOG_INFO(TAG, "logger online, sd=%s",
+                 pageros_logger_is_writing_to_sd() ? "yes" : "no");
     }
 
     // Wi-Fi station bring-up (FW-009). We init the radio so the HTTPS
