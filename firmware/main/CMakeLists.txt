@@ -11,6 +11,7 @@ idf_component_register(
         storage
         network
         display
+        imu
         nvs_flash
         app_update
         esp_hw_support

@@ -20,6 +20,7 @@
 #include "pageros_display.h"
 #include "pageros_gps.h"
 #include "pageros_identity.h"
+#include "pageros_imu.h"
 #include "pageros_input.h"
 #include "pageros_input_router.h"
 #include "pageros_keyboard.h"
@@ -181,6 +182,14 @@ void app_main(void)
     esp_err_t kbd_err = pageros_kbd_init();
     if (kbd_err != ESP_OK) {
         ESP_LOGW(TAG, "kbd init skipped: %s", esp_err_to_name(kbd_err));
+    }
+
+    // IMU stub (FW-012). Confirms the BHI260AP is present on the bus
+    // so future fusion-firmware work has a real probe to start from;
+    // no event dispatch in v1 per TASKS.md.
+    esp_err_t imu_err = pageros_imu_init();
+    if (imu_err != ESP_OK) {
+        ESP_LOGW(TAG, "IMU init skipped: %s", esp_err_to_name(imu_err));
     }
 
     // Input router (FW-024): joins both driver queues into one dispatcher
