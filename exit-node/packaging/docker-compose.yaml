@@ -1,0 +1,31 @@
+# Local-dev convenience: builds and runs the exit-node container with
+# the example config mounted in, USB LoRa dongle passed through, and a
+# host-network mode so the bundled HTTPS proxy can reach the public
+# internet without extra port plumbing.
+#
+# For multi-arch CI builds use `docker buildx build` directly (see
+# README.md). This file is meant for a single-host x86 dev loop.
+
+services:
+  exit-node:
+    build:
+      context: ..
+      dockerfile: packaging/Dockerfile
+    image: pageros/exit-node:dev
+    container_name: pageros-exit-node
+    restart: unless-stopped
+    # USB LoRa transceiver. Adjust the host path to match your hardware
+    # (commonly /dev/ttyUSB0 or /dev/ttyACM0). The container path matches
+    # the example config.
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+    # Host networking so the exit-node can forward to arbitrary HTTPS
+    # endpoints without a NAT hop. Drop to bridge if you only need
+    # local-only testing.
+    network_mode: host
+    # Mount a real config in over the bundled example. Operators copy
+    # exit-node.example.yaml, edit, and bind-mount it here.
+    volumes:
+      - ./exit-node.local.yaml:/etc/pager-ecosystem/exit-node.yaml:ro
+    # The default ENTRYPOINT already runs --config /etc/pager-ecosystem/
+    # exit-node.yaml so no command override is needed.

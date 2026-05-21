@@ -1,0 +1,22 @@
+#!/bin/sh
+# Prerm — runs before files are removed.
+#
+# Stop and disable the service on a clean removal so dpkg can take the
+# binary out from under it.
+
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        if [ -d /run/systemd/system ]; then
+            systemctl stop exit-node.service || true
+            systemctl disable exit-node.service || true
+        fi
+        ;;
+    upgrade)
+        # Leave the service alive across upgrades; postinst will
+        # try-restart it once the new binary is in place.
+        ;;
+esac
+
+exit 0

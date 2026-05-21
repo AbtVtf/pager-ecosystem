@@ -1,0 +1,14 @@
+Package: pageros-exit-node
+Version: __VERSION__
+Section: net
+Priority: optional
+Architecture: __ARCH__
+Maintainer: PagerOS Maintainers <maintainers@pageros.org>
+Homepage: https://github.com/pageros/pager-ecosystem
+Depends: adduser
+Description: PagerOS Exit Node — LoRa to HTTPS bridge
+ The exit-node is the project's reference Go implementation of the
+ LoRa-to-Internet bridge described in SPEC.md §11. It listens for
+ PagerOS device requests on a USB LoRa transceiver, forwards them as
+ HTTPS calls to the public Internet, and returns the response over
+ LoRa to the originating device.

@@ -1,0 +1,40 @@
+[Unit]
+Description=PagerOS Exit Node (LoRa <-> HTTPS bridge)
+Documentation=https://github.com/pageros/pager-ecosystem
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/exit-node --config /etc/pager-ecosystem/exit-node.yaml
+Restart=on-failure
+RestartSec=5
+
+# Run as the dedicated unprivileged user the postinst creates. The user
+# must be in the `dialout` group to open /dev/ttyUSB*; the postinst adds
+# this group membership at install time.
+User=pageros-exit
+Group=pageros-exit
+
+# Hardening — the exit-node only needs read access to its config and
+# write access to the USB LoRa device. Lock everything else down.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=false
+DeviceAllow=/dev/ttyUSB0 rw
+DeviceAllow=/dev/ttyUSB1 rw
+DeviceAllow=/dev/ttyACM0 rw
+DeviceAllow=/dev/ttyACM1 rw
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

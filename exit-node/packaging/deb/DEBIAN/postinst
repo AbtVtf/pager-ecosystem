@@ -1,0 +1,47 @@
+#!/bin/sh
+# Postinst — runs after files have been unpacked.
+#
+# Responsibilities:
+#  1. Create the dedicated `pageros-exit` system user.
+#  2. Add that user to `dialout` so the systemd unit can open
+#     /dev/ttyUSB* without root.
+#  3. Reload systemd so the freshly-installed unit becomes visible,
+#     and enable+start it on a fresh install. On upgrades, restart.
+#
+# Idempotent — safe to re-run.
+
+set -e
+
+case "$1" in
+    configure)
+        if ! getent passwd pageros-exit >/dev/null; then
+            adduser --system --group --no-create-home \
+                --home /nonexistent \
+                --gecos "PagerOS Exit Node" \
+                pageros-exit
+        fi
+        # dialout group owns the serial devices on Debian/Ubuntu/Raspberry Pi OS.
+        if getent group dialout >/dev/null; then
+            usermod -a -G dialout pageros-exit || true
+        fi
+
+        # The bundled config is intentionally a placeholder. Operators
+        # must edit it before the service is useful.
+        chown root:pageros-exit /etc/pager-ecosystem/exit-node.yaml
+        chmod 0640 /etc/pager-ecosystem/exit-node.yaml
+
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+            if [ -z "$2" ]; then
+                # Fresh install (no previous version).
+                systemctl enable exit-node.service || true
+                systemctl start exit-node.service || true
+            else
+                # Upgrade — restart picks up the new binary.
+                systemctl try-restart exit-node.service || true
+            fi
+        fi
+        ;;
+esac
+
+exit 0
