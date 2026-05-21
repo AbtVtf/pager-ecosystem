@@ -60,6 +60,7 @@ from pageros.push import (
     send_push,
 )
 from pageros.signing import ENVIRON_DEVICE_ID
+from pageros.widgets import Screen, Widget, to_frame_dict
 
 __all__ = ["App", "Request", "Response"]
 
@@ -617,6 +618,14 @@ class App:
         if isinstance(body, (bytes, bytearray, memoryview)):
             extra_headers.setdefault("Content-Type", _CBOR_CONTENT_TYPE)
             return status, extra_headers, bytes(body)
+
+        # Handlers may return a Screen / Widget builder (PY-003) or a
+        # plain Frame dict; flatten widget instances before encoding so
+        # the codec only sees CBOR-native containers.
+        if isinstance(body, (Screen, Widget)):
+            body = body.to_dict()
+        if isinstance(body, (dict, list, tuple)):
+            body = to_frame_dict(body)
 
         # Assume a Frame dict (or any CBOR-encodable value) — encode it
         # canonically. Any TypeError surfaces as 500; we let it bubble
