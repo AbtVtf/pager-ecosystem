@@ -9,6 +9,7 @@ export type {
   Ctx,
   Handler,
   AppOptions,
+  SignatureVerification,
   Frame,
   Widget,
   Action,
@@ -21,3 +22,23 @@ export {
   CborEncodeError,
   CborFloat,
 } from "./codec.js";
+export {
+  HEADER_DEVICE,
+  HEADER_SIG,
+  HEADER_TIMESTAMP,
+  DEFAULT_MAX_SKEW_SECONDS,
+  ED25519_PUBKEY_LEN,
+  ED25519_SIG_LEN,
+  ED25519_SEED_LEN,
+  SignatureError,
+  MissingHeader,
+  InvalidEncoding,
+  TimestampSkew,
+  BadSignature,
+  buildSigningInput,
+  computeBodyHash,
+  publicKeyFromSeed,
+  signRequest,
+  verifyRequest,
+} from "./signing.js";
+export type { VerifiedRequest, VerifyRequestOptions, SignRequestOptions } from "./signing.js";

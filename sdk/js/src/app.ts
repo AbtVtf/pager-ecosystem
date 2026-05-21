@@ -24,6 +24,11 @@ import {
   encodeFrame,
 } from "./codec.js";
 import type { Frame } from "./frame.js";
+import {
+  SignatureError,
+  verifyRequest,
+  type VerifyRequestOptions,
+} from "./signing.js";
 
 export type { Frame, Widget, Action } from "./frame.js";
 
@@ -62,9 +67,25 @@ export class Response {
 
 export type Handler = (req: Request) => unknown | Promise<unknown>;
 
+/**
+ * Per-app signature-verification policy.
+ *
+ * - ``false`` (the default) — skip verification entirely; handlers still
+ *   see whatever ``PagerOS-Device`` header the client sent, but
+ *   ``ctx.deviceId`` is unverified.
+ * - ``true`` — require a valid ``PagerOS-Sig`` on every request, using
+ *   the default 5-minute skew window.
+ * - object — require verification with the given options (custom skew
+ *   window, injected ``now()`` for tests).
+ */
+export type SignatureVerification =
+  | boolean
+  | Pick<VerifyRequestOptions, "maxSkewSeconds" | "now">;
+
 export interface AppOptions {
   name?: string;
   loraCompatible?: boolean;
+  verifySignature?: SignatureVerification;
 }
 
 interface DispatchResult {
@@ -93,11 +114,13 @@ const ROUTE_SEP = " ";
 export class App {
   readonly name: string;
   readonly loraCompatible: boolean;
+  readonly verifySignature: SignatureVerification;
   private readonly routes = new Map<RouteKey, Handler>();
 
   constructor(opts: AppOptions = {}) {
     this.name = opts.name ?? "pageros-app";
     this.loraCompatible = opts.loraCompatible ?? false;
+    this.verifySignature = opts.verifySignature ?? false;
   }
 
   // -- registration ---------------------------------------------------------
@@ -181,8 +204,35 @@ export class App {
       return this.errorResponse(404, `Not found: ${methodNorm} ${routePath}`);
     }
 
-    let decodedBody: unknown = null;
     const rawBody = opts.body;
+
+    // Signature verification short-circuits ahead of the CBOR body decode
+    // and the handler invocation. The signing input includes the raw
+    // body bytes (sha256), so we MUST verify before tampering with body
+    // bytes — decoded shape diverges from the bytes the device signed.
+    let verifiedDeviceId: Uint8Array | null = opts.verifiedDeviceId ?? null;
+    let signedTimestamp: number | null = null;
+    if (this.verifySignature !== false && opts.verifiedDeviceId === undefined) {
+      const verifyOpts = this.verifySignature === true ? {} : this.verifySignature;
+      try {
+        const verified = verifyRequest({
+          method: methodNorm,
+          url: rawPath,
+          headers: opts.headers ?? {},
+          body: rawBody ?? null,
+          ...verifyOpts,
+        });
+        verifiedDeviceId = verified.deviceId;
+        signedTimestamp = verified.timestamp;
+      } catch (err) {
+        if (err instanceof SignatureError) {
+          return this.unauthorised(err);
+        }
+        throw err;
+      }
+    }
+
+    let decodedBody: unknown = null;
     if (rawBody && rawBody.length > 0) {
       const ctype = (headerMap["content-type"] ?? "").split(";", 1)[0]!.trim().toLowerCase();
       if (ctype === CBOR_CONTENT_TYPE) {
@@ -199,9 +249,9 @@ export class App {
     }
 
     const ctx: Ctx = {
-      deviceId: opts.verifiedDeviceId ?? parseDeviceHeader(headerMap),
+      deviceId: verifiedDeviceId ?? parseDeviceHeader(headerMap),
       session: opts.session ?? null,
-      timestamp: parseTimestampHeader(headerMap),
+      timestamp: signedTimestamp ?? parseTimestampHeader(headerMap),
     };
 
     const request: Request = {
@@ -349,6 +399,17 @@ export class App {
       extraHeaders["Content-Type"] = CBOR_CONTENT_TYPE;
     }
     return { status, headers: extraHeaders, body: encoded };
+  }
+
+  private unauthorised(error: SignatureError): DispatchResult {
+    // Per SPEC §7.4 a 401 surfaces as "Sign-in required" on the device
+    // after one retry. The error frame body identifies the failure
+    // class for debugging (and matches Python's behaviour).
+    return this.errorResponse(
+      401,
+      `${error.name}: ${error.message}`,
+      { "WWW-Authenticate": `PagerOS-Sig realm="${this.name}"` },
+    );
   }
 
   private errorResponse(
