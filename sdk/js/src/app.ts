@@ -41,7 +41,7 @@ import {
   X25519_KEY_LEN,
 } from "./encryption.js";
 
-export type { Frame, Widget, Action } from "./frame.js";
+export type { Frame, FrameWidget, Action } from "./frame.js";
 
 export const CBOR_CONTENT_TYPE = "application/cbor";
 export const CBOR_ACCEPT = "application/cbor; pagerOS=1";
