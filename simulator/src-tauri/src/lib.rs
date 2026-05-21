@@ -5,19 +5,24 @@
 // frontend can pick any PROTO-003 vector by name and display the resulting
 // PNG. SIM-003 maps host-OS keyboard activity to the canonical device
 // `InputEvent` set (QWERTY chars, encoder, ENTER, BACK) via `dispatch_input`
-// — see `input.rs` and `KEYMAP.md`. The full Direct/Proxy network paths
-// land later (SIM-004 / SIM-006).
+// — see `input.rs` and `KEYMAP.md`. SIM-004 (this file's `direct_*` commands
+// + `direct.rs`) connects to a local PagerOS app server over plain HTTP and
+// renders the returned CBOR Frame. Proxy mode (SIM-006) will reuse the same
+// commands behind a swappable transport.
 
+pub mod direct;
 pub mod input;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use base64::Engine;
 use pageros_renderer::{decode_frame_cbor, png_export, render_frame, Framebuffer};
 use serde::Serialize;
 
+use crate::direct::{DirectClient, DirectState, HttpMethod, Request as DirectRequest};
 use crate::input::{map_host_key, HostKey, InputEvent};
 
 #[derive(Serialize)]
@@ -48,15 +53,7 @@ fn render_vector(name: String) -> Result<RenderResult, String> {
     let cbor_path = vectors_dir().join(format!("{name}.cbor"));
     let cbor = fs::read(&cbor_path)
         .map_err(|e| format!("read {}: {e}", cbor_path.display()))?;
-    let (fb, decode_err) = render_cbor_or_placeholder(&cbor);
-    let png = png_export::encode_png(&fb);
-    Ok(RenderResult {
-        png_b64: base64::engine::general_purpose::STANDARD.encode(&png),
-        width: pageros_renderer::DISPLAY_WIDTH,
-        height: pageros_renderer::DISPLAY_HEIGHT,
-        vector: name,
-        decode_error: decode_err,
-    })
+    Ok(render_to_result(name, &cbor))
 }
 
 /// Render raw CBOR bytes supplied by the frontend (hex-encoded). Lets you
@@ -65,15 +62,7 @@ fn render_vector(name: String) -> Result<RenderResult, String> {
 #[tauri::command]
 fn render_cbor_hex(hex: String) -> Result<RenderResult, String> {
     let bytes = decode_hex(&hex).map_err(|e| format!("invalid hex: {e}"))?;
-    let (fb, decode_err) = render_cbor_or_placeholder(&bytes);
-    let png = png_export::encode_png(&fb);
-    Ok(RenderResult {
-        png_b64: base64::engine::general_purpose::STANDARD.encode(&png),
-        width: pageros_renderer::DISPLAY_WIDTH,
-        height: pageros_renderer::DISPLAY_HEIGHT,
-        vector: "(pasted)".into(),
-        decode_error: decode_err,
-    })
+    Ok(render_to_result("(pasted)".into(), &bytes))
 }
 
 /// List every PROTO-003 vector the simulator can render, sorted by category
@@ -230,15 +219,117 @@ fn recent_inputs(state: tauri::State<'_, Mutex<InputState>>) -> Vec<InputEvent> 
     state.lock().expect("input state poisoned").log.clone()
 }
 
+/// Encode a (possibly invalid) CBOR Frame to a PNG + decode status.
+/// Shared by `render_vector` / `render_cbor_hex` / `direct_*` so every
+/// response renders through one code path.
+fn render_to_result(label: String, cbor: &[u8]) -> RenderResult {
+    let (fb, decode_err) = render_cbor_or_placeholder(cbor);
+    let png = png_export::encode_png(&fb);
+    RenderResult {
+        png_b64: base64::engine::general_purpose::STANDARD.encode(&png),
+        width: pageros_renderer::DISPLAY_WIDTH,
+        height: pageros_renderer::DISPLAY_HEIGHT,
+        vector: label,
+        decode_error: decode_err,
+    }
+}
+
+/// Combined result of a direct-mode HTTP exchange + render. The PNG is
+/// always populated (the renderer produces a placeholder on decode error
+/// — see `render_cbor_or_placeholder`), and the network metadata is
+/// surfaced separately so the SIM-005 panel can pick it up unchanged.
+#[derive(Serialize)]
+pub struct DirectRenderResult {
+    #[serde(flatten)]
+    pub render: RenderResult,
+    pub status: u16,
+    pub url: String,
+    pub content_type: Option<String>,
+    pub body_bytes: usize,
+    /// Snapshot of navigation state after the request — frontend uses
+    /// this to keep its address bar in sync without a second round trip.
+    pub state: DirectState,
+}
+
+/// Set / replace the direct-mode base URL. Clears history because a base
+/// switch invalidates any in-flight navigation.
+#[tauri::command]
+fn direct_set_base_url(
+    url: String,
+    client: tauri::State<'_, Arc<DirectClient>>,
+) -> Result<DirectState, String> {
+    client.set_base_url(&url).map_err(|e| e.to_string())?;
+    Ok(client.state())
+}
+
+#[tauri::command]
+fn direct_state(client: tauri::State<'_, Arc<DirectClient>>) -> DirectState {
+    client.state()
+}
+
+/// Fetch `path` (GET or POST), render the response, return everything
+/// the frontend needs to draw the screen + update the address bar.
+#[tauri::command]
+async fn direct_fetch(
+    path: String,
+    method: Option<HttpMethod>,
+    body: Option<Vec<u8>>,
+    client: tauri::State<'_, Arc<DirectClient>>,
+) -> Result<DirectRenderResult, String> {
+    let client = (*client).clone();
+    let method = method.unwrap_or(HttpMethod::Get);
+    let response = client
+        .fetch(DirectRequest {
+            method,
+            path: &path,
+            body: body.as_deref(),
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(DirectRenderResult {
+        render: render_to_result(response.resolved_url.clone(), &response.body),
+        status: response.status,
+        body_bytes: response.body.len(),
+        url: response.resolved_url,
+        content_type: response.content_type,
+        state: client.state(),
+    })
+}
+
+/// Navigate one entry back in the direct-mode history stack. Returns
+/// `None` if history is empty so the frontend can decide whether to
+/// route to the Shell (per `SPEC.md` §5.6.2: BACK from app root → Shell).
+#[tauri::command]
+async fn direct_back(
+    client: tauri::State<'_, Arc<DirectClient>>,
+) -> Result<Option<DirectRenderResult>, String> {
+    let client = (*client).clone();
+    let response = client.back().await.map_err(|e| e.to_string())?;
+    let Some(response) = response else { return Ok(None) };
+    Ok(Some(DirectRenderResult {
+        render: render_to_result(response.resolved_url.clone(), &response.body),
+        status: response.status,
+        body_bytes: response.body.len(),
+        url: response.resolved_url,
+        content_type: response.content_type,
+        state: client.state(),
+    }))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(Mutex::new(InputState::default()))
+        .manage(Arc::new(DirectClient::new()))
         .invoke_handler(tauri::generate_handler![
             render_vector,
             render_cbor_hex,
             list_vectors,
             dispatch_input,
             recent_inputs,
+            direct_set_base_url,
+            direct_state,
+            direct_fetch,
+            direct_back,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

@@ -44,7 +44,8 @@ never collide with device input:
 | `Alt+J` | Next PROTO-003 vector |
 | `Alt+K` | Previous PROTO-003 vector |
 | `Alt+P` | Toggle the vector picker overlay |
-| `Alt+R` | Re-render the current vector |
+| `Alt+G` | Toggle the SIM-004 direct-mode address bar |
+| `Alt+R` | Re-render the current vector (or reload the direct-mode URL) |
 | `Alt+H` | Hide the on-screen hint/status overlay |
 
 `Escape` while the picker is open closes the picker only — it is not
