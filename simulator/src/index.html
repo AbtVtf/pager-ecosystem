@@ -290,16 +290,22 @@
       let directMode = false;
       const DEFAULT_DIRECT_URL = 'http://localhost:8080/';
 
-      async function loadVectors() {
+      // Populate the vectors[] array + picker UI. Returns true when at
+      // least one vector loaded; the caller decides whether to also render
+      // the default vector to the screen. Split out of the old
+      // `loadVectors()` so SIM-EXT-001 can keep Alt+P/J/K vector tools
+      // working in startup-URL mode without painting the default vector
+      // on top of the live direct-mode frame.
+      async function loadVectorList() {
         try {
           vectors = await invoke('list_vectors');
         } catch (err) {
           status.textContent = `list error: ${err}`;
-          return;
+          return false;
         }
         if (vectors.length === 0) {
           status.textContent = 'no vectors found';
-          return;
+          return false;
         }
         // Default to widget_text_minimal_string if present.
         const preferred = vectors.findIndex(
@@ -307,7 +313,13 @@
         );
         if (preferred >= 0) index = preferred;
         renderPicker();
-        await renderCurrent();
+        return true;
+      }
+
+      async function loadVectors() {
+        if (await loadVectorList()) {
+          await renderCurrent();
+        }
       }
 
       function renderPicker() {
@@ -815,7 +827,34 @@
         if (result) ev.preventDefault();
       });
 
-      loadVectors();
+      // SIM-EXT-001 — startup boot. If the simulator was launched with
+      // `PAGEROS_SIMULATOR_URL` set, drop straight into direct mode against
+      // that URL (skipping the vector-picker default) so `pagerctl
+      // simulate <url>` / `pagerctl dev` can spawn the simulator and have
+      // it "open onto" the right app without any keyboard driving.
+      // Vector dev tooling (Alt+P/J/K) still works either way — the
+      // vectors list is populated regardless so an engineer can flip back.
+      async function init() {
+        let startup = null;
+        try {
+          startup = await invoke('startup_url');
+        } catch (err) {
+          // Backend wired wrong; fall back to today's behavior rather
+          // than blocking startup. Surface to status so it's diagnosable.
+          status.textContent = `startup_url error: ${err}`;
+        }
+        if (startup) {
+          // Populate vectors in the background; never paint the default
+          // vector on top of the live direct-mode frame.
+          loadVectorList();
+          addrUrl.value = startup;
+          await directGo(startup);
+        } else {
+          await loadVectors();
+        }
+      }
+
+      init();
     </script>
   </body>
 </html>

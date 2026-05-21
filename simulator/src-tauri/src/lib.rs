@@ -8,7 +8,10 @@
 // — see `input.rs` and `KEYMAP.md`. SIM-004 (this file's `direct_*` commands
 // + `direct.rs`) connects to a local PagerOS app server over plain HTTP and
 // renders the returned CBOR Frame. Proxy mode (SIM-006) will reuse the same
-// commands behind a swappable transport.
+// commands behind a swappable transport. SIM-EXT-001 reads
+// `PAGEROS_SIMULATOR_URL` at startup so CLI subprocesses (`pagerctl
+// simulate`, `pagerctl dev`) can launch the simulator preconfigured for
+// direct mode without driving the address bar.
 
 pub mod direct;
 pub mod input;
@@ -347,6 +350,47 @@ fn network_clear(log: tauri::State<'_, Arc<NetworkLog>>) {
     log.clear();
 }
 
+/// Startup URL the simulator was launched with (`PAGEROS_SIMULATOR_URL`
+/// env var). The frontend polls this once during init: if `Some(url)`,
+/// it skips the vector-picker default and drops directly into direct
+/// mode against that URL. `None` → normal vector-picker startup.
+///
+/// The value is captured once at process start (see `read_startup_url`)
+/// so toggling the env var after launch can't change behavior mid-session.
+#[tauri::command]
+fn startup_url(state: tauri::State<'_, StartupUrl>) -> Option<String> {
+    state.0.clone()
+}
+
+/// Process-wide snapshot of `PAGEROS_SIMULATOR_URL` resolved at startup.
+/// Wrapped so it can be Tauri-managed alongside other shared state.
+pub struct StartupUrl(pub Option<String>);
+
+const STARTUP_URL_ENV: &str = "PAGEROS_SIMULATOR_URL";
+
+/// Decode a `PAGEROS_SIMULATOR_URL` value into the optional startup URL
+/// the frontend should consume. Trims surrounding whitespace and treats
+/// blank values as "no URL" — empty strings are too easy to set
+/// accidentally in shell pipelines for them to mean "force direct mode".
+///
+/// URL syntax is **not** validated here: invalid URLs are passed through
+/// so the frontend can call `direct_set_base_url` / `direct_fetch` and
+/// surface the parse error in the status bar exactly like a typed-in
+/// bad URL (PAG-135 acceptance: invalid URL → still launches, error in
+/// status bar, no crash).
+pub fn parse_startup_url(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn read_startup_url() -> Option<String> {
+    parse_startup_url(std::env::var(STARTUP_URL_ENV).ok().as_deref())
+}
+
 /// Navigate one entry back in the direct-mode history stack. Returns
 /// `None` if history is empty so the frontend can decide whether to
 /// route to the Shell (per `SPEC.md` §5.6.2: BACK from app root → Shell).
@@ -370,10 +414,12 @@ async fn direct_back(
 pub fn run() {
     let network_log = Arc::new(NetworkLog::new());
     let direct_client = Arc::new(DirectClient::with_log(Some(network_log.clone())));
+    let startup = StartupUrl(read_startup_url());
     tauri::Builder::default()
         .manage(Mutex::new(InputState::default()))
         .manage(direct_client)
         .manage(network_log)
+        .manage(startup)
         .invoke_handler(tauri::generate_handler![
             render_vector,
             render_cbor_hex,
@@ -387,8 +433,56 @@ pub fn run() {
             network_exchanges,
             network_exchange,
             network_clear,
+            startup_url,
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
         .expect("error while running PagerOS simulator");
+}
+
+#[cfg(test)]
+mod startup_url_tests {
+    use super::parse_startup_url;
+
+    #[test]
+    fn none_when_env_var_unset() {
+        assert_eq!(parse_startup_url(None), None);
+    }
+
+    #[test]
+    fn none_when_empty() {
+        assert_eq!(parse_startup_url(Some("")), None);
+    }
+
+    #[test]
+    fn none_when_whitespace_only() {
+        assert_eq!(parse_startup_url(Some("   \t\n")), None);
+    }
+
+    #[test]
+    fn passes_through_a_normal_url() {
+        assert_eq!(
+            parse_startup_url(Some("http://localhost:8080/")),
+            Some("http://localhost:8080/".to_string()),
+        );
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace() {
+        assert_eq!(
+            parse_startup_url(Some("  https://example.com/app\n")),
+            Some("https://example.com/app".to_string()),
+        );
+    }
+
+    #[test]
+    fn does_not_validate_url_syntax() {
+        // Invalid URLs are returned unchanged so the frontend can surface
+        // the parse error in the status bar, matching the contract for a
+        // typed-in bad URL (PAG-135 acceptance).
+        assert_eq!(
+            parse_startup_url(Some("not a url")),
+            Some("not a url".to_string()),
+        );
+    }
 }
