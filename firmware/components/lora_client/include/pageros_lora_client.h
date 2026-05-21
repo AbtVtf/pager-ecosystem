@@ -83,6 +83,17 @@ esp_err_t pageros_lora_reassemble(const uint8_t * const *fragments,
                                   uint16_t n_fragments,
                                   uint8_t *out, size_t cap, size_t *out_len);
 
+// --- Exit Node discovery (FW-027) --------------------------------- //
+//
+// The SX1262 RX path forwards advertised packets here. Selection is
+// best-RSSI-then-lowest-load. Entries time out after 60 s of silence.
+
+void pageros_exit_discovery_on_packet(const uint8_t *payload, size_t len,
+                                      int16_t rssi_dbm);
+const uint8_t *pageros_exit_discovery_best(int16_t *out_rssi);
+int  pageros_exit_discovery_count(void);
+void pageros_exit_discovery_reset(void);
+
 // High-level request/response. Builds outer + inner envelope, encrypts
 // inner to `app_pubkey`, fragments, transmits via the SX1262, awaits
 // the reassembled response. Returns ESP_OK + the decrypted response

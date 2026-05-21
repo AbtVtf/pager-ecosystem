@@ -8,6 +8,7 @@ idf_component_register(
         "src/lora_envelope.c"
         "src/lora_fragment.c"
         "src/lora_client.c"
+        "src/exit_discovery.c"
     INCLUDE_DIRS "include"
     REQUIRES esp_common lora
     PRIV_REQUIRES log esp_timer
