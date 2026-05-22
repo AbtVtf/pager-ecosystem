@@ -9,7 +9,7 @@ idf_component_register(
         "src/fonts.c"
         "src/fonts_utf8.c"
     INCLUDE_DIRS "include"
-    PRIV_INCLUDE_DIRS "src" "vendor/font8x8"
+    PRIV_INCLUDE_DIRS "src" "vendor/font8x8" "vendor/font16x16"
     REQUIRES esp_common
     PRIV_REQUIRES log
 )

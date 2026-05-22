@@ -32,6 +32,11 @@ static struct {
     char recents[PAGEROS_APPRT_RECENTS_MAX][PAGEROS_APPRT_MAX_APP_ID];
     size_t recents_len;
 
+    // Open-apps stack — distinct from recents; persists across switches
+    // and reboots. Most-recent first.
+    char open_apps[PAGEROS_APPRT_OPEN_MAX][PAGEROS_APPRT_MAX_APP_ID];
+    size_t open_apps_len;
+
     pageros_apprt_stats_t stats;
 } g;
 
@@ -125,6 +130,102 @@ static void recents_drop(const char *app_id)
     }
 }
 
+// -------- open-apps stack ----------------------------------------- //
+
+static void open_apps_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(ns_name(), NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "ocount", (uint8_t)g.open_apps_len);
+    for (size_t i = 0; i < g.open_apps_len; i++) {
+        char key[16]; snprintf(key, sizeof(key), "o%u", (unsigned)i);
+        nvs_set_str(h, key, g.open_apps[i]);
+    }
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void open_apps_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(ns_name(), NVS_READONLY, &h) != ESP_OK) {
+        g.open_apps_len = 0;
+        return;
+    }
+    uint8_t count = 0;
+    if (nvs_get_u8(h, "ocount", &count) != ESP_OK) count = 0;
+    if (count > PAGEROS_APPRT_OPEN_MAX) count = PAGEROS_APPRT_OPEN_MAX;
+    g.open_apps_len = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        char key[16]; snprintf(key, sizeof(key), "o%u", i);
+        size_t sz = sizeof(g.open_apps[g.open_apps_len]);
+        if (nvs_get_str(h, key, g.open_apps[g.open_apps_len], &sz) == ESP_OK
+                && g.open_apps[g.open_apps_len][0] != '\0') {
+            g.open_apps_len++;
+        }
+    }
+    nvs_close(h);
+}
+
+esp_err_t pageros_apprt_open_mark(const char *app_id)
+{
+    if (!g.inited || !app_id || !*app_id) return ESP_ERR_INVALID_ARG;
+    if (strlen(app_id) >= PAGEROS_APPRT_MAX_APP_ID) return ESP_ERR_INVALID_ARG;
+    // The shell is the desktop itself — never goes in the open list.
+    if (strcmp(app_id, "pageros.shell") == 0) return ESP_OK;
+
+    int existing = -1;
+    for (size_t i = 0; i < g.open_apps_len; i++) {
+        if (strncmp(g.open_apps[i], app_id, sizeof(g.open_apps[0])) == 0) {
+            existing = (int)i; break;
+        }
+    }
+    if (existing == 0) return ESP_OK;  // already front
+    if (existing > 0) {
+        char tmp[PAGEROS_APPRT_MAX_APP_ID];
+        strncpy(tmp, g.open_apps[existing], sizeof(tmp));
+        for (int i = existing; i > 0; i--) {
+            memcpy(g.open_apps[i], g.open_apps[i - 1], sizeof(g.open_apps[0]));
+        }
+        memcpy(g.open_apps[0], tmp, sizeof(g.open_apps[0]));
+    } else {
+        size_t move = g.open_apps_len < PAGEROS_APPRT_OPEN_MAX
+                          ? g.open_apps_len : PAGEROS_APPRT_OPEN_MAX - 1;
+        for (size_t i = move; i > 0; i--) {
+            memcpy(g.open_apps[i], g.open_apps[i - 1], sizeof(g.open_apps[0]));
+        }
+        strncpy(g.open_apps[0], app_id, sizeof(g.open_apps[0]) - 1);
+        g.open_apps[0][sizeof(g.open_apps[0]) - 1] = '\0';
+        if (g.open_apps_len < PAGEROS_APPRT_OPEN_MAX) g.open_apps_len++;
+    }
+    open_apps_save();
+    return ESP_OK;
+}
+
+esp_err_t pageros_apprt_open_close(const char *app_id)
+{
+    if (!g.inited || !app_id || !*app_id) return ESP_ERR_INVALID_ARG;
+    for (size_t i = 0; i < g.open_apps_len; i++) {
+        if (strncmp(g.open_apps[i], app_id, sizeof(g.open_apps[0])) == 0) {
+            for (size_t j = i + 1; j < g.open_apps_len; j++) {
+                memcpy(g.open_apps[j - 1], g.open_apps[j], sizeof(g.open_apps[0]));
+            }
+            g.open_apps_len--;
+            open_apps_save();
+            return ESP_OK;
+        }
+    }
+    return ESP_OK;  // idempotent
+}
+
+size_t pageros_apprt_open_list(const char *out_app_ids[], size_t cap)
+{
+    if (!g.inited || !out_app_ids) return 0;
+    size_t n = g.open_apps_len < cap ? g.open_apps_len : cap;
+    for (size_t i = 0; i < n; i++) out_app_ids[i] = g.open_apps[i];
+    return n;
+}
+
 // -------- lifecycle ------------------------------------------------ //
 
 static void fg_release(void)
@@ -170,8 +271,10 @@ esp_err_t pageros_apprt_init(const pageros_apprt_opts_t *opts)
     memset(&g.stats, 0, sizeof(g.stats));
     // NVS init is the caller's job at boot; we just open our namespace.
     recents_load();
+    open_apps_load();
     g.inited = true;
-    ESP_LOGI(TAG, "init: %u recents loaded", (unsigned)g.recents_len);
+    ESP_LOGI(TAG, "init: %u recents, %u open loaded",
+             (unsigned)g.recents_len, (unsigned)g.open_apps_len);
     return ESP_OK;
 }
 

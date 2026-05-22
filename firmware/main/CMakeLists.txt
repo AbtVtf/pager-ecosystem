@@ -23,9 +23,11 @@ idf_component_register(
         i2c_bus
         xl9555
         power
+        audio
         nvs_flash
         app_update
         esp_hw_support
+        esp_timer
         spi_flash
         log
 )

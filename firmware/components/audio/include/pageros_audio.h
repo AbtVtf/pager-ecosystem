@@ -64,6 +64,24 @@ esp_err_t pageros_audio_play_tone(pageros_tone_t t);
 void pageros_audio_set_muted(bool muted);
 bool pageros_audio_is_muted(void);
 
+// --- UI sound effects (cyberpunk shell) ---------------------------- //
+//
+// click.pcm + scroll.pcm are transcoded from /audio/*.mp3 to 8 kHz
+// mono s16le at build time and embedded in flash. The shell calls
+// these on every interaction:
+//
+//   - `click` on button activations (ENTER on a button or focused
+//     list item).
+//   - `scroll` on cursor / focus movement (encoder tick, sidebar
+//     focus change).
+//
+// Both are non-blocking-friendly: they ship a few hundred samples to
+// the I2S channel and return. Calls overlap by truncating the prior
+// effect — short and crisp wins over interleaved.
+
+esp_err_t pageros_audio_play_ui_click(void);
+esp_err_t pageros_audio_play_ui_scroll(void);
+
 #ifdef __cplusplus
 }
 #endif

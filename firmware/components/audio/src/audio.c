@@ -22,6 +22,7 @@
 #include "driver/i2s_std.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "pageros_i2c_bus.h"
 
@@ -43,6 +44,8 @@ static const char *TAG = "audio";
 #define TONE_DURATION_MS       250
 #define TONE_SAMPLES_PER_MS    (PAGEROS_AUDIO_SAMPLE_RATE / 1000)
 
+static void ui_audio_task(void *arg);
+
 static struct {
     bool inited;
     bool muted;
@@ -50,6 +53,14 @@ static struct {
     i2s_chan_handle_t tx_chan;
     int16_t *tones[PAGEROS_TONE__COUNT];
     size_t   tone_lens[PAGEROS_TONE__COUNT];
+
+    // Async UI sound worker — the shell calls play_ui_click/scroll
+    // from input-handler context where any blocking I2S write would
+    // freeze the UI for the clip duration. The worker drains the
+    // queue, dropping older requests so a burst of encoder ticks
+    // doesn't pile up dozens of overlapping plays.
+    QueueHandle_t ui_queue;
+    TaskHandle_t  ui_task;
 } g = { .volume = 128 };
 
 // --- ES8311 minimal init -------------------------------------------- //
@@ -181,8 +192,24 @@ esp_err_t pageros_audio_init(void)
     if (r != ESP_OK) return r;
 
     gen_tones();
+
+    // UI sound worker — single-slot queue with drain-on-receive so a
+    // fast input burst collapses to one play instead of stacking up.
+    if (!g.ui_queue) {
+        g.ui_queue = xQueueCreate(8, sizeof(uint8_t));
+        if (g.ui_queue) {
+            BaseType_t ok = xTaskCreate(ui_audio_task, "ui_audio",
+                                        2048, NULL, 5, &g.ui_task);
+            if (ok != pdPASS) {
+                vQueueDelete(g.ui_queue);
+                g.ui_queue = NULL;
+                ESP_LOGW(TAG, "ui audio task spawn failed; UI sounds disabled");
+            }
+        }
+    }
+
     g.inited = true;
-    ESP_LOGI(TAG, "init done (i2s + es8311)");
+    ESP_LOGI(TAG, "init done (i2s + es8311 + ui sounds)");
     return ESP_OK;
 }
 
@@ -238,3 +265,65 @@ esp_err_t pageros_audio_play_tone(pageros_tone_t t)
 
 void pageros_audio_set_muted(bool muted) { g.muted = muted; }
 bool pageros_audio_is_muted(void) { return g.muted; }
+
+// --- UI sound effects (embedded via EMBED_FILES) ------------------- //
+//
+// ESP-IDF's EMBED_FILES drops a pair of symbols around each file:
+//   _binary_<safe_name>_start  / _binary_<safe_name>_end
+// where `<safe_name>` is the file path with non-alphanumeric chars
+// replaced by '_'. For tones/click.pcm the symbol is `click_pcm`.
+
+extern const uint8_t _binary_click_pcm_start[]  asm("_binary_click_pcm_start");
+extern const uint8_t _binary_click_pcm_end[]    asm("_binary_click_pcm_end");
+extern const uint8_t _binary_scroll_pcm_start[] asm("_binary_scroll_pcm_start");
+extern const uint8_t _binary_scroll_pcm_end[]   asm("_binary_scroll_pcm_end");
+
+typedef enum { UI_SOUND_CLICK = 0, UI_SOUND_SCROLL = 1 } ui_sound_t;
+
+static void ui_audio_task(void *arg)
+{
+    (void)arg;
+    uint8_t kind;
+    for (;;) {
+        if (xQueueReceive(g.ui_queue, &kind, portMAX_DELAY) != pdTRUE) continue;
+        // Drain backlog — last request wins so encoder bursts don't
+        // queue dozens of overlapping plays.
+        uint8_t newer;
+        while (xQueueReceive(g.ui_queue, &newer, 0) == pdTRUE) kind = newer;
+
+        const uint8_t *start = NULL, *end = NULL;
+        if (kind == UI_SOUND_CLICK) {
+            start = _binary_click_pcm_start;
+            end   = _binary_click_pcm_end;
+        } else if (kind == UI_SOUND_SCROLL) {
+            start = _binary_scroll_pcm_start;
+            end   = _binary_scroll_pcm_end;
+        }
+        if (!start || !end || end <= start) continue;
+        if (g.muted) continue;
+        size_t bytes = (size_t)(end - start);
+        // Blocking play is fine on this task — only this task ever
+        // blocks on i2s_channel_write, callers stay snappy.
+        pageros_audio_play_pcm((const int16_t *)start, bytes / 2);
+    }
+}
+
+static esp_err_t enqueue_ui_sound(ui_sound_t kind)
+{
+    if (!g.inited || !g.ui_queue) return ESP_ERR_INVALID_STATE;
+    uint8_t v = (uint8_t)kind;
+    // Non-blocking enqueue — if the queue is full we drop, which is
+    // exactly what we want for crisp UI feedback.
+    if (xQueueSend(g.ui_queue, &v, 0) != pdTRUE) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
+}
+
+esp_err_t pageros_audio_play_ui_click(void)
+{
+    return enqueue_ui_sound(UI_SOUND_CLICK);
+}
+
+esp_err_t pageros_audio_play_ui_scroll(void)
+{
+    return enqueue_ui_sound(UI_SOUND_SCROLL);
+}

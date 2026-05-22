@@ -82,6 +82,26 @@ esp_err_t pageros_apprt_kill(void);
 // owned strings valid until the next mutator call.
 size_t pageros_apprt_recents(const char *out_app_ids[], size_t cap);
 
+// --- Open-apps stack (cyberpunk desktop) ---------------------------- //
+//
+// Layered on top of `recents` to give the sidebar rail a notion of
+// "open" apps. v1 semantics: an app is "open" iff it has an entry in
+// this list. Switching to an open app re-fetches its home Frame (apps
+// are stateless server-rendered) — but the list of open ids persists
+// across switches and reboots so the rail stays stable.
+
+#define PAGEROS_APPRT_OPEN_MAX 6
+
+// Mark `app_id` as open. Idempotent — if it's already in the list it
+// gets promoted to the front. Persists to NVS.
+esp_err_t pageros_apprt_open_mark(const char *app_id);
+
+// Remove `app_id` from the open list. Idempotent.
+esp_err_t pageros_apprt_open_close(const char *app_id);
+
+// Read the open list (most-recent first). Returns count.
+size_t pageros_apprt_open_list(const char *out_app_ids[], size_t cap);
+
 // Heap snapshot — exposed for the diagnostics screen.
 typedef struct {
     pageros_apprt_state_t state;

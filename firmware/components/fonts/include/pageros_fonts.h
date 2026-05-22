@@ -95,6 +95,29 @@ int pageros_fonts_draw_text(const pageros_fonts_canvas_t *canvas,
                             uint16_t fg_rgb565,
                             int max_width_px);
 
+// --- 16x16 path ----------------------------------------------------- //
+//
+// Large glyphs for the desktop shell chrome (status bars, tile labels,
+// titles). Codepoints with a designed glyph use it; others fall back to
+// the 8x8 bitmap rendered at (x + 4, y + 4) — every ASCII codepoint
+// renders, just less prettily.
+
+#define PAGEROS_FONTS_GLYPH16_W   16
+#define PAGEROS_FONTS_GLYPH16_H   16
+
+int pageros_fonts_measure_text_16(const char *text, int text_len);
+
+int pageros_fonts_draw_codepoint_16(const pageros_fonts_canvas_t *canvas,
+                                    int x, int y,
+                                    uint32_t codepoint,
+                                    uint16_t fg_rgb565);
+
+int pageros_fonts_draw_text_16(const pageros_fonts_canvas_t *canvas,
+                               int x, int y,
+                               const char *text, int text_len,
+                               uint16_t fg_rgb565,
+                               int max_width_px);
+
 // Decode the next UTF-8 codepoint at `*p`. On success `*p` advances
 // past the consumed bytes and the codepoint is returned. On a malformed
 // or truncated sequence the function returns 0xFFFD (replacement char)
