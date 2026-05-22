@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
+#include <sys/stat.h>
 
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -43,6 +44,7 @@
 #include "pageros_logger.h"
 #include "pageros_lora.h"
 #include "pageros_network.h"
+#include "pageros_nfc.h"
 #include "pageros_power.h"
 #include "pageros_shell.h"
 #include "pageros_sideload.h"
@@ -71,6 +73,17 @@ typedef enum {
     SHELL_PAGE_SETTINGS,
     SHELL_PAGE_WIFI,
     SHELL_PAGE_ADD_APP,
+
+    // Lock screen + built-in app pages — rendered directly (no Frame).
+    SHELL_PAGE_LOCK,
+    SHELL_PAGE_NOTIF,            // notification center
+    SHELL_PAGE_QUICK,            // quick-settings overlay
+    SHELL_PAGE_NOTES_LIST,
+    SHELL_PAGE_NOTES_EDIT,
+    SHELL_PAGE_SYSMON,
+    SHELL_PAGE_IDQR,
+    SHELL_PAGE_NFC,
+    SHELL_PAGE_SET_PIN,
 } shell_page_t;
 
 typedef enum {
@@ -112,6 +125,36 @@ static struct {
     char  *text_buf;
     size_t text_cap;
 
+    // --- Lock screen ---------------------------------------------- //
+    char  lock_pin_buf[5];        // user-entered PIN (4 digits max)
+    char  lock_pin_stored[5];     // loaded from NVS on boot
+    bool  lock_pin_required;      // true if a PIN is set
+    int   lock_attempts;          // wrong-PIN streak (for back-off / lockout)
+
+    // --- Notifications -------------------------------------------- //
+    struct notif_entry {
+        char    text[80];
+        uint8_t level;            // pageros_toast_level_t
+        int64_t timestamp_us;
+    } notifs[20];
+    int notif_count;
+    int notif_focus;
+
+    // --- Quick settings ------------------------------------------- //
+    int  quick_focus;             // index in quick-toggle list
+
+    // --- Notes ---------------------------------------------------- //
+    char notes_files[12][32];
+    int  notes_count;
+    int  notes_focus;
+    char notes_edit_buf[2048];
+    char notes_edit_filename[32];
+    int  notes_edit_scroll;
+
+    // --- NFC ------------------------------------------------------ //
+    char nfc_last_uid[32];
+    char nfc_status[64];
+
     // Chrome cache — system uptime at boot, used for the clock display.
     uint64_t boot_unix_us;
 } s = {
@@ -121,6 +164,80 @@ static struct {
     .rail_index   = 0,
     .text_input_widget = -1,
 };
+
+static void render_screen(void);
+
+// --- Notifications ring buffer ------------------------------------- //
+//
+// System events (Wi-Fi connects, installs, errors) get appended here
+// and surfaced both as transient toasts *and* persistently in the
+// notification center page. Capacity is 20; oldest gets evicted.
+
+static void notif_push(const char *text, pageros_toast_level_t level)
+{
+    if (!text || !*text) return;
+    if (s.notif_count >= (int)(sizeof(s.notifs) / sizeof(s.notifs[0]))) {
+        // Shift up.
+        for (int i = 1; i < s.notif_count; i++) {
+            s.notifs[i - 1] = s.notifs[i];
+        }
+        s.notif_count--;
+    }
+    strncpy(s.notifs[s.notif_count].text, text,
+            sizeof(s.notifs[0].text) - 1);
+    s.notifs[s.notif_count].text[sizeof(s.notifs[0].text) - 1] = '\0';
+    s.notifs[s.notif_count].level        = (uint8_t)level;
+    s.notifs[s.notif_count].timestamp_us = esp_timer_get_time();
+    s.notif_count++;
+}
+
+// Convenience: push to ring AND show a toast at the same time. Most
+// system events use this — it keeps the two stores in sync.
+static void notif_announce(const char *text, pageros_toast_level_t level,
+                           int toast_ms)
+{
+    notif_push(text, level);
+    pageros_toast(text, level, toast_ms);
+}
+
+// --- Lock screen PIN storage -------------------------------------- //
+
+#include "nvs.h"
+
+static void lock_load_pin(void)
+{
+    s.lock_pin_buf[0]    = '\0';
+    s.lock_pin_stored[0] = '\0';
+    s.lock_pin_required  = false;
+    nvs_handle_t h;
+    if (nvs_open("pageros_lock", NVS_READONLY, &h) != ESP_OK) return;
+    size_t sz = sizeof(s.lock_pin_stored);
+    if (nvs_get_str(h, "pin", s.lock_pin_stored, &sz) == ESP_OK
+            && s.lock_pin_stored[0] != '\0') {
+        s.lock_pin_required = true;
+    }
+    nvs_close(h);
+}
+
+static esp_err_t lock_save_pin(const char *pin)
+{
+    nvs_handle_t h;
+    esp_err_t r = nvs_open("pageros_lock", NVS_READWRITE, &h);
+    if (r != ESP_OK) return r;
+    if (!pin || !*pin) {
+        nvs_erase_key(h, "pin");
+        s.lock_pin_required = false;
+        s.lock_pin_stored[0] = '\0';
+    } else {
+        nvs_set_str(h, "pin", pin);
+        s.lock_pin_required = true;
+        strncpy(s.lock_pin_stored, pin, sizeof(s.lock_pin_stored) - 1);
+        s.lock_pin_stored[sizeof(s.lock_pin_stored) - 1] = '\0';
+    }
+    nvs_commit(h);
+    nvs_close(h);
+    return ESP_OK;
+}
 
 // --- Chrome state collection -------------------------------------- //
 
@@ -188,14 +305,32 @@ static void desktop_refresh_tiles(void)
 {
     s.tile_count = 0;
 
-    // "Settings" is always tile 0 — it's the gateway to Wi-Fi / Add app.
-    snprintf(s.tile_app_ids[s.tile_count], sizeof(s.tile_app_ids[0]),
-             "shell:settings");
-    snprintf(s.tile_names[s.tile_count], sizeof(s.tile_names[0]),
-             "SETTINGS");
-    s.tiles[s.tile_count].name   = s.tile_names[s.tile_count];
-    s.tiles[s.tile_count].unread = 0;
-    s.tile_count++;
+    // Built-in tiles always come first so the user can find them
+    // before any sideloaded apps clutter the grid. Each maps to a
+    // "builtin:X" href routed by handle_button_href.
+    struct { const char *href; const char *name; } builtin[] = {
+        { "shell:settings",  "SETTINGS" },
+        { "builtin:notif",   "NOTIFS"   },
+        { "builtin:quick",   "QUICK"    },
+        { "builtin:notes",   "NOTES"    },
+        { "builtin:sysmon",  "SYSMON"   },
+        { "builtin:idqr",    "IDENTITY" },
+        { "builtin:nfc",     "NFC"      },
+    };
+    int n_builtin = (int)(sizeof(builtin) / sizeof(builtin[0]));
+    for (int i = 0; i < n_builtin && s.tile_count < MAX_DESKTOP_TILES; i++) {
+        strncpy(s.tile_app_ids[s.tile_count], builtin[i].href,
+                sizeof(s.tile_app_ids[0]) - 1);
+        s.tile_app_ids[s.tile_count][sizeof(s.tile_app_ids[0]) - 1] = '\0';
+        strncpy(s.tile_names[s.tile_count], builtin[i].name,
+                sizeof(s.tile_names[0]) - 1);
+        s.tile_names[s.tile_count][sizeof(s.tile_names[0]) - 1] = '\0';
+        s.tiles[s.tile_count].name   = s.tile_names[s.tile_count];
+        // Surface the unread count as a badge on the NOTIFS tile.
+        s.tiles[s.tile_count].unread =
+            (strcmp(builtin[i].href, "builtin:notif") == 0) ? s.notif_count : 0;
+        s.tile_count++;
+    }
 
     // Walk /sd/apps if SD is mounted. If not, we just show Settings —
     // installing apps requires the SD anyway.
@@ -368,6 +503,527 @@ static void render_app(pageros_fonts_canvas_t *canvas,
     pageros_widgets_render_screen(&ctx, body);
 }
 
+// --- Built-in app + lock screen renders ---------------------------- //
+
+static void render_lock(pageros_fonts_canvas_t *canvas)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    pageros_widgets_chrome_scanlines(canvas, 0, 0, canvas->w, canvas->h, 3);
+
+    // Clock huge & centered.
+    int64_t up_us = esp_timer_get_time();
+    int up_min   = (int)(up_us / 1000000 / 60);
+    int hh       = (up_min / 60) % 24;
+    int mm       = up_min % 60;
+    char clock[8];
+    snprintf(clock, sizeof(clock), "%02d:%02d", hh, mm);
+    int clock_w = 16 * 3 * (int)strlen(clock);
+    int cx = (canvas->w - clock_w) / 2;
+    pageros_fonts_draw_text_scaled_16(canvas, cx, 30, clock, -1,
+                                      g_palette.info, 3);
+
+    // Identity below clock.
+    char fp[PAGEROS_IDENTITY_FP_LEN] = {0};
+    if (pageros_identity_fingerprint(fp) == ESP_OK && fp[0]) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "ID:%s", fp);
+        int bw = pageros_fonts_measure_text_16(buf, -1);
+        pageros_fonts_draw_text_16(canvas, (canvas->w - bw) / 2,
+                                   30 + 48 + 8, buf, -1,
+                                   g_palette.dim, canvas->w);
+    }
+
+    // PIN entry box (centered, below identity).
+    int box_y = 30 + 48 + 8 + 28;
+    if (s.lock_pin_required) {
+        // 4 cells, 32px wide each, 8px gap. Total width = 4*32 + 3*8 = 152.
+        int total = 4 * 32 + 3 * 8;
+        int x0 = (canvas->w - total) / 2;
+        int filled = (int)strlen(s.lock_pin_buf);
+        for (int i = 0; i < 4; i++) {
+            int cx0 = x0 + i * (32 + 8);
+            pageros_widgets_outline_rect(canvas, cx0, box_y, 32, 32,
+                                         g_palette.info);
+            if (i < filled) {
+                // Filled dot.
+                pageros_widgets_fill_rect(canvas, cx0 + 10, box_y + 10,
+                                          12, 12, g_palette.accent);
+            }
+        }
+        const char *prompt = "ENTER PIN";
+        int pw = pageros_fonts_measure_text(prompt, -1);
+        pageros_fonts_draw_text(canvas, (canvas->w - pw) / 2,
+                                box_y + 32 + 12, prompt, -1,
+                                g_palette.dim, canvas->w);
+    } else {
+        const char *prompt = "PRESS ENTER TO UNLOCK";
+        int pw = pageros_fonts_measure_text_16(prompt, -1);
+        pageros_fonts_draw_text_16(canvas, (canvas->w - pw) / 2,
+                                   box_y + 8, prompt, -1,
+                                   g_palette.accent, canvas->w);
+    }
+}
+
+static void render_notif(pageros_fonts_canvas_t *canvas,
+                         pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int x = 12;
+    int y = PAGEROS_CHROME_BAR_H + 8;
+    const char *title = "NOTIFICATIONS";
+    pageros_fonts_draw_text_16(canvas, x, y, title, -1, g_palette.accent,
+                               canvas->w - 20);
+    y += 22;
+    // Underline.
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    if (s.notif_count == 0) {
+        pageros_fonts_draw_text_16(canvas, x, y + 16, "NO MESSAGES", -1,
+                                   g_palette.dim, canvas->w);
+        return;
+    }
+    int row_h = 14;
+    int max_rows = (canvas->h - y - PAGEROS_CHROME_BAR_H - 8) / row_h;
+    if (max_rows < 1) max_rows = 1;
+    int start = s.notif_count - max_rows;
+    if (start < 0) start = 0;
+    // Show newest at top → iterate from end.
+    int row = 0;
+    for (int i = s.notif_count - 1; i >= 0 && row < max_rows; i--, row++) {
+        bool focused = (i == s.notif_focus);
+        if (focused) {
+            pageros_widgets_fill_rect(canvas, x - 4, y + row * row_h - 2,
+                                      canvas->w - 16, row_h,
+                                      g_palette.accent);
+        }
+        uint16_t fg = focused ? g_palette.bg : g_palette.fg;
+        if (s.notifs[i].level == PAGEROS_TOAST_OK)    fg = focused ? g_palette.bg : g_palette.info;
+        if (s.notifs[i].level == PAGEROS_TOAST_WARN)  fg = focused ? g_palette.bg : g_palette.warn;
+        if (s.notifs[i].level == PAGEROS_TOAST_ERROR) fg = focused ? g_palette.bg : g_palette.error;
+        // Timestamp (uptime mins).
+        int mins = (int)(s.notifs[i].timestamp_us / 1000000 / 60);
+        char prefix[24];
+        snprintf(prefix, sizeof(prefix), "[%02d:%02d] ",
+                 (mins / 60) % 24, mins % 60);
+        int px = pageros_fonts_draw_text(canvas, x, y + row * row_h + 3,
+                                         prefix, -1, fg, 80);
+        pageros_fonts_draw_text(canvas, px, y + row * row_h + 3,
+                                s.notifs[i].text, -1, fg,
+                                canvas->w - x - 16);
+    }
+}
+
+static void render_quick(pageros_fonts_canvas_t *canvas,
+                         pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int x = 12;
+    int y = PAGEROS_CHROME_BAR_H + 8;
+    pageros_fonts_draw_text_16(canvas, x, y, "QUICK SETTINGS", -1,
+                               g_palette.accent, canvas->w - 20);
+    y += 24;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    struct { const char *label; bool state; const char *on; const char *off; }
+        toggles[] = {
+            { "SILENT MODE",     pageros_audio_is_muted(),  "ON",      "OFF" },
+            { "WI-FI",           pageros_wifi_is_connected(),"ON",     "OFF" },
+            { "LORA RADIO",      pageros_lora_is_ready(),   "READY",   "OFF" },
+            { "LOCK NOW",        false,                     "—",       "—"   },
+            { "PIN",             s.lock_pin_required,       "SET",     "OFF" },
+        };
+    int n = sizeof(toggles) / sizeof(toggles[0]);
+    int row_h = 24;
+    for (int i = 0; i < n; i++) {
+        int row_y = y + i * row_h;
+        bool focused = (i == s.quick_focus);
+        if (focused) {
+            pageros_widgets_fill_rect(canvas, x - 4, row_y - 2,
+                                      canvas->w - 16, row_h,
+                                      g_palette.accent);
+        }
+        uint16_t fg = focused ? g_palette.bg : g_palette.fg;
+        pageros_fonts_draw_text_16(canvas, x, row_y + 2,
+                                   toggles[i].label, -1, fg, canvas->w);
+        const char *val = toggles[i].state ? toggles[i].on : toggles[i].off;
+        int vw = pageros_fonts_measure_text_16(val, -1);
+        pageros_fonts_draw_text_16(canvas, canvas->w - vw - 24,
+                                   row_y + 2, val, -1,
+                                   focused ? g_palette.bg : g_palette.info,
+                                   canvas->w);
+    }
+}
+
+#include <dirent.h>
+static void notes_refresh_list(void)
+{
+    s.notes_count = 0;
+    DIR *d = opendir("/sd/notes");
+    if (!d) {
+        // Try to create the directory.
+        mkdir("/sd/notes", 0777);
+        d = opendir("/sd/notes");
+    }
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) && s.notes_count < 12) {
+        if (e->d_name[0] == '.') continue;
+        strncpy(s.notes_files[s.notes_count], e->d_name,
+                sizeof(s.notes_files[0]) - 1);
+        s.notes_files[s.notes_count][sizeof(s.notes_files[0]) - 1] = '\0';
+        s.notes_count++;
+    }
+    closedir(d);
+    if (s.notes_focus >= s.notes_count + 1) s.notes_focus = 0;
+}
+
+static void notes_load(const char *fname)
+{
+    strncpy(s.notes_edit_filename, fname,
+            sizeof(s.notes_edit_filename) - 1);
+    s.notes_edit_filename[sizeof(s.notes_edit_filename) - 1] = '\0';
+    s.notes_edit_buf[0] = '\0';
+    char path[96];
+    snprintf(path, sizeof(path), "/sd/notes/%s", fname);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    size_t n = fread(s.notes_edit_buf, 1, sizeof(s.notes_edit_buf) - 1, f);
+    s.notes_edit_buf[n] = '\0';
+    fclose(f);
+}
+
+static void notes_save_current(void)
+{
+    if (!s.notes_edit_filename[0]) return;
+    char path[96];
+    snprintf(path, sizeof(path), "/sd/notes/%s", s.notes_edit_filename);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(s.notes_edit_buf, 1, strlen(s.notes_edit_buf), f);
+    fclose(f);
+}
+
+static void render_notes_list(pageros_fonts_canvas_t *canvas,
+                              pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    pageros_fonts_draw_text_16(canvas, x, y, "NOTES", -1,
+                               g_palette.accent, canvas->w - 20);
+    y += 24;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    int row_h = 18;
+    // Row 0 is "+ NEW NOTE". Rows 1..n are files.
+    int total = 1 + s.notes_count;
+    for (int i = 0; i < total; i++) {
+        int row_y = y + i * row_h;
+        if (row_y + row_h > canvas->h - PAGEROS_CHROME_BAR_H) break;
+        bool focused = (i == s.notes_focus);
+        if (focused) {
+            pageros_widgets_fill_rect(canvas, x - 4, row_y - 2,
+                                      canvas->w - 16, row_h,
+                                      g_palette.accent);
+        }
+        uint16_t fg = focused ? g_palette.bg : g_palette.fg;
+        const char *label = (i == 0) ? "+ NEW NOTE" : s.notes_files[i - 1];
+        pageros_fonts_draw_text(canvas, x, row_y + 4, label, -1, fg,
+                                canvas->w - x - 16);
+    }
+}
+
+static void render_notes_edit(pageros_fonts_canvas_t *canvas,
+                              pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int x = 8, y = PAGEROS_CHROME_BAR_H + 4;
+    char hdr[64];
+    snprintf(hdr, sizeof(hdr), "[%s]", s.notes_edit_filename);
+    pageros_fonts_draw_text(canvas, x, y, hdr, -1, g_palette.accent,
+                            canvas->w - 16);
+    y += 12;
+    pageros_widgets_fill_rect(canvas, x, y - 2, canvas->w - 16, 1,
+                              g_palette.info);
+
+    // Render buffer as wrapped text. Simple: 60 chars per line.
+    const char *p = s.notes_edit_buf;
+    int line_h = 10;
+    int line_y = y + 2;
+    char line[64];
+    int col = 0;
+    while (*p) {
+        if (*p == '\n' || col >= 60) {
+            line[col] = '\0';
+            if (line_y + line_h < canvas->h - PAGEROS_CHROME_BAR_H) {
+                pageros_fonts_draw_text(canvas, x, line_y, line, -1,
+                                        g_palette.fg, canvas->w - 16);
+            }
+            line_y += line_h;
+            col = 0;
+            if (*p == '\n') p++;
+            continue;
+        }
+        line[col++] = *p++;
+    }
+    if (col > 0) {
+        line[col] = '\0';
+        if (line_y + line_h < canvas->h - PAGEROS_CHROME_BAR_H) {
+            pageros_fonts_draw_text(canvas, x, line_y, line, -1,
+                                    g_palette.fg, canvas->w - 16);
+        }
+        line_y += line_h;
+    }
+    // Cursor at end of buffer.
+    pageros_widgets_fill_rect(canvas, x + col * 8, line_y - line_h, 1,
+                              line_h, g_palette.accent);
+}
+
+#include "esp_heap_caps.h"
+
+static void render_sysmon(pageros_fonts_canvas_t *canvas,
+                          pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    pageros_fonts_draw_text_16(canvas, x, y, "SYSTEM MONITOR", -1,
+                               g_palette.accent, canvas->w - 20);
+    y += 24;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    int line_h = 12;
+    char buf[80];
+
+    // Uptime
+    int64_t up_us = esp_timer_get_time();
+    int up_s = (int)(up_us / 1000000);
+    snprintf(buf, sizeof(buf), "UPTIME    %02d:%02d:%02d",
+             up_s / 3600, (up_s / 60) % 60, up_s % 60);
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // Heap
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t total_internal = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+    snprintf(buf, sizeof(buf), "HEAP      %u / %u KB",
+             (unsigned)(free_internal / 1024),
+             (unsigned)(total_internal / 1024));
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // PSRAM
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t total_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    snprintf(buf, sizeof(buf), "PSRAM     %u / %u KB",
+             (unsigned)(free_psram / 1024),
+             (unsigned)(total_psram / 1024));
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // Wi-Fi
+    snprintf(buf, sizeof(buf), "WI-FI     %s",
+             pageros_wifi_is_connected() ? "CONNECTED" : "OFF");
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // LoRa
+    snprintf(buf, sizeof(buf), "LORA      %s",
+             pageros_lora_is_ready() ? "READY" : "OFF");
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // GPS
+    pageros_gps_fix_t fix = {0};
+    bool fixed = (pageros_gps_get_last_fix(&fix) == ESP_OK
+                  && fix.accuracy_m > 0.0f);
+    snprintf(buf, sizeof(buf), "GPS       %s",
+             fixed ? "FIX" : "NO FIX");
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // Tasks
+    snprintf(buf, sizeof(buf), "TASKS     %u",
+             (unsigned)uxTaskGetNumberOfTasks());
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // Notifications
+    snprintf(buf, sizeof(buf), "NOTIFS    %d", s.notif_count);
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // Open apps
+    snprintf(buf, sizeof(buf), "OPEN APPS %d", s.rail_count);
+    pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+}
+
+static void render_idqr(pageros_fonts_canvas_t *canvas,
+                        pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    pageros_fonts_draw_text_16(canvas, x, y, "DEVICE IDENTITY", -1,
+                               g_palette.accent, canvas->w - 20);
+    y += 24;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    // Fingerprint big and chunky.
+    char fp[PAGEROS_IDENTITY_FP_LEN] = {0};
+    pageros_identity_fingerprint(fp);
+    if (fp[0]) {
+        int fp_w = 16 * 2 * (int)strlen(fp);
+        int fpx = (canvas->w - fp_w) / 2;
+        pageros_fonts_draw_text_scaled_16(canvas, fpx, y + 4, fp, -1,
+                                          g_palette.info, 2);
+    }
+    y += 44;
+    // Label
+    const char *lbl = "FINGERPRINT (BASE32)";
+    int lw = pageros_fonts_measure_text(lbl, -1);
+    pageros_fonts_draw_text(canvas, (canvas->w - lw) / 2, y,
+                            lbl, -1, g_palette.dim, canvas->w);
+    y += 14;
+
+    // Pubkey as hex (4 rows of 16 hex chars = 64 hex chars = 32 bytes)
+    uint8_t pub[PAGEROS_IDENTITY_PUBKEY_LEN] = {0};
+    if (pageros_identity_pubkey(pub) == ESP_OK) {
+        char line[64];
+        for (int row = 0; row < 4; row++) {
+            int pos = 0;
+            for (int col = 0; col < 8; col++) {
+                int off = row * 8 + col;
+                pos += snprintf(line + pos, sizeof(line) - pos,
+                                "%02X ", pub[off]);
+            }
+            int lwi = pageros_fonts_measure_text(line, -1);
+            pageros_fonts_draw_text(canvas, (canvas->w - lwi) / 2,
+                                    y, line, -1, g_palette.fg, canvas->w);
+            y += 11;
+        }
+    }
+    // Footer hint
+    const char *hint = "SCAN OR COPY TO PAIR";
+    int hw = pageros_fonts_measure_text(hint, -1);
+    pageros_fonts_draw_text(canvas, (canvas->w - hw) / 2,
+                            canvas->h - PAGEROS_CHROME_BAR_H - 14,
+                            hint, -1, g_palette.dim, canvas->w);
+}
+
+static void render_set_pin(pageros_fonts_canvas_t *canvas,
+                           pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int y = PAGEROS_CHROME_BAR_H + 16;
+    const char *title = s.lock_pin_required ? "CHANGE PIN" : "SET NEW PIN";
+    int tw = pageros_fonts_measure_text_16(title, -1);
+    pageros_fonts_draw_text_16(canvas, (canvas->w - tw) / 2, y, title, -1,
+                               g_palette.accent, canvas->w);
+    y += 30;
+    const char *sub = "TYPE 4 DIGITS, THEN ENTER";
+    int sw = pageros_fonts_measure_text(sub, -1);
+    pageros_fonts_draw_text(canvas, (canvas->w - sw) / 2, y, sub, -1,
+                            g_palette.dim, canvas->w);
+    y += 26;
+
+    int total = 4 * 32 + 3 * 8;
+    int x0 = (canvas->w - total) / 2;
+    int filled = (int)strlen(s.lock_pin_buf);
+    for (int i = 0; i < 4; i++) {
+        int cx0 = x0 + i * (32 + 8);
+        pageros_widgets_outline_rect(canvas, cx0, y, 32, 32, g_palette.info);
+        if (i < filled) {
+            // Echo the digit (it's not secret yet — user is setting it).
+            char ch[2] = { s.lock_pin_buf[i], '\0' };
+            pageros_fonts_draw_glyph_scaled_16(canvas, cx0 + 8, y + 8,
+                                               (uint32_t)ch[0],
+                                               g_palette.fg, 1);
+            pageros_widgets_fill_rect(canvas, cx0 + 8, y + 24, 16, 2,
+                                      g_palette.accent);
+        }
+    }
+    y += 32 + 16;
+    const char *hint = "BACK = CANCEL · BACKSPACE = CLEAR";
+    int hw = pageros_fonts_measure_text(hint, -1);
+    pageros_fonts_draw_text(canvas, (canvas->w - hw) / 2, y, hint, -1,
+                            g_palette.dim, canvas->w);
+}
+
+static void render_nfc(pageros_fonts_canvas_t *canvas,
+                       pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+
+    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    pageros_fonts_draw_text_16(canvas, x, y, "NFC SCANNER", -1,
+                               g_palette.accent, canvas->w - 20);
+    y += 24;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    // Centered "TAP A TAG" instruction or last UID.
+    if (s.nfc_last_uid[0]) {
+        const char *lbl = "LAST TAG UID";
+        int lw = pageros_fonts_measure_text(lbl, -1);
+        pageros_fonts_draw_text(canvas, (canvas->w - lw) / 2,
+                                y + 12, lbl, -1, g_palette.dim, canvas->w);
+        int uw = 16 * 2 * (int)strlen(s.nfc_last_uid);
+        if (uw > canvas->w - 40) uw = canvas->w - 40;
+        pageros_fonts_draw_text_scaled_16(canvas,
+                                          (canvas->w - uw) / 2, y + 30,
+                                          s.nfc_last_uid, -1,
+                                          g_palette.info, 2);
+    } else {
+        const char *prompt = "TAP A TAG TO SCAN";
+        int pw = pageros_fonts_measure_text_16(prompt, -1);
+        pageros_fonts_draw_text_16(canvas, (canvas->w - pw) / 2,
+                                   y + 32, prompt, -1,
+                                   g_palette.accent, canvas->w);
+    }
+
+    // Status line.
+    if (s.nfc_status[0]) {
+        int sw = pageros_fonts_measure_text(s.nfc_status, -1);
+        pageros_fonts_draw_text(canvas, (canvas->w - sw) / 2,
+                                canvas->h - PAGEROS_CHROME_BAR_H - 14,
+                                s.nfc_status, -1, g_palette.dim, canvas->w);
+    }
+}
+
 static void render_screen(void)
 {
     rail_refresh();
@@ -387,6 +1043,15 @@ static void render_screen(void)
     case SHELL_PAGE_SETTINGS:
     case SHELL_PAGE_WIFI:
     case SHELL_PAGE_ADD_APP:   render_modal_frame(&canvas, &cs); break;
+    case SHELL_PAGE_LOCK:      render_lock(&canvas); break;
+    case SHELL_PAGE_NOTIF:     render_notif(&canvas, &cs); break;
+    case SHELL_PAGE_QUICK:     render_quick(&canvas, &cs); break;
+    case SHELL_PAGE_NOTES_LIST: render_notes_list(&canvas, &cs); break;
+    case SHELL_PAGE_NOTES_EDIT: render_notes_edit(&canvas, &cs); break;
+    case SHELL_PAGE_SYSMON:    render_sysmon(&canvas, &cs); break;
+    case SHELL_PAGE_IDQR:      render_idqr(&canvas, &cs); break;
+    case SHELL_PAGE_NFC:       render_nfc(&canvas, &cs); break;
+    case SHELL_PAGE_SET_PIN:   render_set_pin(&canvas, &cs); break;
     }
     // Toast banner floats above everything (after content + scanlines).
     pageros_widgets_chrome_toast(&canvas, &g_palette);
@@ -460,6 +1125,116 @@ static esp_err_t emit_addapp_thunk(uint8_t *b, size_t c, size_t *n)
     return pageros_shell_emit_add_app(b, c, n, s.url,
                                       s.addapp_msg[0] ? s.addapp_msg : NULL,
                                       s.addapp_msg_level[0] ? s.addapp_msg_level : NULL);
+}
+
+static void mount_lock(void)
+{
+    ESP_LOGI("shell", "mount_lock");
+    s.page = SHELL_PAGE_LOCK;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.lock_pin_buf[0] = '\0';
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_notif(void)
+{
+    ESP_LOGI("shell", "mount_notif");
+    s.page = SHELL_PAGE_NOTIF;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.notif_focus = (s.notif_count > 0) ? (s.notif_count - 1) : 0;
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_quick(void)
+{
+    ESP_LOGI("shell", "mount_quick");
+    s.page = SHELL_PAGE_QUICK;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.quick_focus = 0;
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_notes_list(void)
+{
+    ESP_LOGI("shell", "mount_notes_list");
+    pageros_storage_init();
+    notes_refresh_list();
+    s.page = SHELL_PAGE_NOTES_LIST;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.notes_focus = 0;
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_notes_edit(const char *filename)
+{
+    ESP_LOGI("shell", "mount_notes_edit: %s", filename ? filename : "(new)");
+    pageros_storage_init();
+    if (filename && *filename) {
+        notes_load(filename);
+    } else {
+        // New note — name by uptime tick.
+        int64_t us = esp_timer_get_time();
+        snprintf(s.notes_edit_filename, sizeof(s.notes_edit_filename),
+                 "note_%llu.txt", (unsigned long long)(us / 1000));
+        s.notes_edit_buf[0] = '\0';
+    }
+    s.page = SHELL_PAGE_NOTES_EDIT;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.text_input_widget = 0;
+    s.text_buf = s.notes_edit_buf;
+    s.text_cap = sizeof(s.notes_edit_buf);
+    render_screen();
+}
+
+static void mount_sysmon(void)
+{
+    ESP_LOGI("shell", "mount_sysmon");
+    s.page = SHELL_PAGE_SYSMON;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_idqr(void)
+{
+    ESP_LOGI("shell", "mount_idqr");
+    s.page = SHELL_PAGE_IDQR;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_nfc(void)
+{
+    ESP_LOGI("shell", "mount_nfc");
+    s.page = SHELL_PAGE_NFC;
+    s.focus_mode = FOCUS_VIEWPORT;
+    strncpy(s.nfc_status, "RADIO READY", sizeof(s.nfc_status));
+    s.nfc_status[sizeof(s.nfc_status) - 1] = '\0';
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_set_pin(void)
+{
+    ESP_LOGI("shell", "mount_set_pin");
+    s.page = SHELL_PAGE_SET_PIN;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.lock_pin_buf[0] = '\0';
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
 }
 
 static void mount_add_app(void)
@@ -626,7 +1401,7 @@ static bool handle_button_href(const char *href)
     if (strcmp(href, "shell:wifi-connect") == 0) {
         if (s.ssid[0] == '\0') {
             strncpy(s.wifi_status, "SSID is empty", sizeof(s.wifi_status));
-            pageros_toast("SSID IS EMPTY", PAGEROS_TOAST_WARN, 2500);
+            notif_announce("SSID IS EMPTY", PAGEROS_TOAST_WARN, 2500);
         } else {
             strncpy(s.wifi_status, "Connecting…", sizeof(s.wifi_status));
             s.wifi_status[sizeof(s.wifi_status) - 1] = '\0';
@@ -634,11 +1409,11 @@ static bool handle_button_href(const char *href)
             if (r == ESP_OK) {
                 strncpy(s.wifi_status, "Connected", sizeof(s.wifi_status));
                 pageros_wifi_creds_save(s.ssid, s.psk);
-                pageros_toast("WI-FI CONNECTED", PAGEROS_TOAST_OK, 2500);
+                notif_announce("WI-FI CONNECTED", PAGEROS_TOAST_OK, 2500);
             } else {
                 snprintf(s.wifi_status, sizeof(s.wifi_status), "Failed: %s",
                          esp_err_to_name(r));
-                pageros_toast("WI-FI FAILED", PAGEROS_TOAST_ERROR, 3000);
+                notif_announce("WI-FI FAILED", PAGEROS_TOAST_ERROR, 3000);
             }
         }
         s.wifi_status[sizeof(s.wifi_status) - 1] = '\0';
@@ -667,13 +1442,13 @@ static bool handle_button_href(const char *href)
                     snprintf(s.addapp_msg, sizeof(s.addapp_msg),
                              "Installed %.48s", app_id);
                     strncpy(s.addapp_msg_level, "info", sizeof(s.addapp_msg_level));
-                    pageros_toast("APP INSTALLED", PAGEROS_TOAST_OK, 2500);
+                    notif_announce("APP INSTALLED", PAGEROS_TOAST_OK, 2500);
                 } else {
                     snprintf(s.addapp_msg, sizeof(s.addapp_msg),
                              "Install failed: %s", esp_err_to_name(r));
                     strncpy(s.addapp_msg_level, "error",
                             sizeof(s.addapp_msg_level));
-                    pageros_toast("INSTALL FAILED", PAGEROS_TOAST_ERROR, 3000);
+                    notif_announce("INSTALL FAILED", PAGEROS_TOAST_ERROR, 3000);
                 }
             }
         }
@@ -683,6 +1458,17 @@ static bool handle_button_href(const char *href)
     }
     if (strncmp(href, "open:", 5) == 0) {
         launch_app(href + 5);
+        return true;
+    }
+    if (strncmp(href, "builtin:", 8) == 0) {
+        const char *id = href + 8;
+        if (strcmp(id, "notif") == 0)        { mount_notif(); return true; }
+        if (strcmp(id, "quick") == 0)        { mount_quick(); return true; }
+        if (strcmp(id, "notes") == 0)        { mount_notes_list(); return true; }
+        if (strcmp(id, "sysmon") == 0)       { mount_sysmon(); return true; }
+        if (strcmp(id, "idqr") == 0)         { mount_idqr(); return true; }
+        if (strcmp(id, "nfc") == 0)          { mount_nfc(); return true; }
+        ESP_LOGW("shell", "unknown builtin: %s", id);
         return true;
     }
     return false;
@@ -794,8 +1580,6 @@ static void viewport_advance_focus(int step)
         break;
     }
     case SHELL_PAGE_APP: {
-        // Generic: walk the body, focus advances by widget index, but
-        // for list widgets we cycle items inside the same widget.
         const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
         int n = focused_list_len(fr, s.vp_focus.widget_index);
         if (n > 0) {
@@ -803,6 +1587,29 @@ static void viewport_advance_focus(int step)
         }
         return;
     }
+    case SHELL_PAGE_NOTIF: {
+        if (s.notif_count <= 0) return;
+        s.notif_focus = (s.notif_focus + step + s.notif_count) % s.notif_count;
+        return;
+    }
+    case SHELL_PAGE_QUICK: {
+        int n_quick = 5;
+        s.quick_focus = (s.quick_focus + step + n_quick) % n_quick;
+        return;
+    }
+    case SHELL_PAGE_NOTES_LIST: {
+        int n_items = 1 + s.notes_count;
+        if (n_items <= 0) return;
+        s.notes_focus = (s.notes_focus + step + n_items) % n_items;
+        return;
+    }
+    case SHELL_PAGE_NOTES_EDIT:
+    case SHELL_PAGE_SYSMON:
+    case SHELL_PAGE_IDQR:
+    case SHELL_PAGE_NFC:
+    case SHELL_PAGE_LOCK:
+    case SHELL_PAGE_SET_PIN:
+        return;
     }
     if (n_stops == 0) return;
     int cur = 0;
@@ -833,10 +1640,142 @@ static void rail_advance(int step)
 
 // --- Input handler ----------------------------------------------- //
 
+// Returns true if the event was handled in a page-specific way (no
+// generic handling needed). When true, the caller skips its normal
+// dispatch.
+static bool handle_special_page_input(const pageros_router_event_t *ev)
+{
+    // SET PIN page — digit entry then ENTER saves.
+    if (s.page == SHELL_PAGE_SET_PIN) {
+        if (ev->kind == PAGEROS_ROUTER_EVT_NAV) {
+            if (ev->as.nav == PAGEROS_ROUTER_NAV_ENTER) {
+                if (strlen(s.lock_pin_buf) >= 4) {
+                    if (lock_save_pin(s.lock_pin_buf) == ESP_OK) {
+                        notif_announce("PIN UPDATED", PAGEROS_TOAST_OK, 2000);
+                    } else {
+                        notif_announce("PIN SAVE FAILED",
+                                       PAGEROS_TOAST_ERROR, 2500);
+                    }
+                    s.lock_pin_buf[0] = '\0';
+                    mount_quick();
+                    return true;
+                }
+                pageros_toast("ENTER 4 DIGITS", PAGEROS_TOAST_WARN, 1500);
+                render_screen();
+                return true;
+            }
+            if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK_LONG) {
+                s.lock_pin_buf[0] = '\0';
+                mount_desktop();
+                return true;
+            }
+            if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK) {
+                if (s.lock_pin_buf[0] != '\0') {
+                    // Backspace one digit.
+                    size_t L = strlen(s.lock_pin_buf);
+                    s.lock_pin_buf[L - 1] = '\0';
+                    pageros_audio_play_ui_scroll();
+                    render_screen();
+                } else {
+                    mount_quick();
+                }
+                return true;
+            }
+        }
+        if (ev->kind == PAGEROS_ROUTER_EVT_KEY && ev->as.key.pressed) {
+            char ch = kb_decode(ev->as.key.row, ev->as.key.col);
+            if (ch >= '0' && ch <= '9') {
+                size_t L = strlen(s.lock_pin_buf);
+                if (L < 4) {
+                    s.lock_pin_buf[L] = ch;
+                    s.lock_pin_buf[L + 1] = '\0';
+                    pageros_audio_play_ui_scroll();
+                }
+                render_screen();
+                return true;
+            }
+            if (ch == '\b' && s.lock_pin_buf[0]) {
+                size_t L = strlen(s.lock_pin_buf);
+                s.lock_pin_buf[L - 1] = '\0';
+                pageros_audio_play_ui_scroll();
+                render_screen();
+                return true;
+            }
+        }
+        return true;
+    }
+
+    // Lock screen — own input rules. PIN entry digits, ENTER validates.
+    if (s.page == SHELL_PAGE_LOCK) {
+        pageros_audio_play_ui_scroll();
+        if (ev->kind == PAGEROS_ROUTER_EVT_NAV) {
+            if (ev->as.nav == PAGEROS_ROUTER_NAV_ENTER) {
+                if (!s.lock_pin_required ||
+                    strcmp(s.lock_pin_buf, s.lock_pin_stored) == 0) {
+                    pageros_audio_play_ui_click();
+                    s.lock_pin_buf[0] = '\0';
+                    s.lock_attempts = 0;
+                    mount_desktop();
+                    return true;
+                }
+                s.lock_attempts++;
+                pageros_toast("WRONG PIN", PAGEROS_TOAST_ERROR, 1500);
+                s.lock_pin_buf[0] = '\0';
+                render_screen();
+                return true;
+            }
+            if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK) {
+                s.lock_pin_buf[0] = '\0';
+                render_screen();
+                return true;
+            }
+        }
+        if (ev->kind == PAGEROS_ROUTER_EVT_KEY && ev->as.key.pressed) {
+            char ch = kb_decode(ev->as.key.row, ev->as.key.col);
+            if (s.lock_pin_required && ch >= '0' && ch <= '9') {
+                size_t L = strlen(s.lock_pin_buf);
+                if (L < 4) {
+                    s.lock_pin_buf[L] = ch;
+                    s.lock_pin_buf[L + 1] = '\0';
+                    if (L + 1 == 4) {
+                        // Auto-submit when 4 digits entered.
+                        if (strcmp(s.lock_pin_buf, s.lock_pin_stored) == 0) {
+                            pageros_audio_play_ui_click();
+                            s.lock_pin_buf[0] = '\0';
+                            mount_desktop();
+                            return true;
+                        }
+                        s.lock_attempts++;
+                        pageros_toast("WRONG PIN", PAGEROS_TOAST_ERROR, 1500);
+                        s.lock_pin_buf[0] = '\0';
+                    }
+                }
+            }
+            render_screen();
+            return true;
+        }
+        return true;
+    }
+    return false;
+}
+
 static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
 {
     (void)ctx;
+    // Detect wake-from-sleep: if we were screen-off or deeper *before*
+    // kicking the power manager, the user is unlocking the device, so
+    // bounce them through the lock screen (or straight to desktop if
+    // no PIN is required) instead of resuming the previous page.
+    pageros_power_state_t prev_pwr = pageros_power_state();
     pageros_power_kick();
+    if (prev_pwr >= PAGEROS_POWER_SCREEN_OFF
+            && s.page != SHELL_PAGE_LOCK) {
+        mount_lock();
+        return true;
+    }
+
+    // Lock screen owns its own input model.
+    if (handle_special_page_input(ev)) return true;
 
     const char *kind = "?";
     switch (ev->kind) {
@@ -905,6 +1844,68 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
                 }
                 break;
             }
+            if (s.page == SHELL_PAGE_QUICK) {
+                switch (s.quick_focus) {
+                case 0:  // Silent
+                    pageros_audio_set_muted(!pageros_audio_is_muted());
+                    pageros_toast(pageros_audio_is_muted()
+                                      ? "SILENT MODE ON" : "SILENT MODE OFF",
+                                  PAGEROS_TOAST_INFO, 1500);
+                    break;
+                case 1:  // Wi-Fi toggle
+                    if (pageros_wifi_is_connected()) {
+                        pageros_wifi_disconnect();
+                        pageros_toast("WI-FI DISCONNECTED",
+                                      PAGEROS_TOAST_INFO, 1500);
+                    } else {
+                        pageros_toast("USE SETTINGS → WI-FI",
+                                      PAGEROS_TOAST_INFO, 1500);
+                    }
+                    break;
+                case 2:  // LoRa toggle — disabled for v1 (no API yet)
+                    pageros_toast("LORA TOGGLE NOT WIRED",
+                                  PAGEROS_TOAST_WARN, 1500);
+                    break;
+                case 3:  // Lock now
+                    mount_lock();
+                    return true;
+                case 4:  // Set PIN
+                    mount_set_pin();
+                    return true;
+                }
+                render_screen();
+                return true;
+            }
+            if (s.page == SHELL_PAGE_NOTES_LIST) {
+                if (s.notes_focus == 0) {
+                    mount_notes_edit(NULL);
+                } else if (s.notes_focus - 1 < s.notes_count) {
+                    mount_notes_edit(s.notes_files[s.notes_focus - 1]);
+                }
+                return true;
+            }
+            if (s.page == SHELL_PAGE_NOTES_EDIT) {
+                // ENTER in edit = newline.
+                size_t L = strlen(s.notes_edit_buf);
+                if (L + 1 < sizeof(s.notes_edit_buf)) {
+                    s.notes_edit_buf[L] = '\n';
+                    s.notes_edit_buf[L + 1] = '\0';
+                    dirty = true;
+                }
+                break;
+            }
+            if (s.page == SHELL_PAGE_NFC) {
+                // The poll task auto-detects tags via on_nfc_scan; the
+                // user just needs to tap a tag near the antenna. ENTER
+                // is a no-op here, but we surface a hint so it doesn't
+                // feel dead.
+                pageros_toast("HOLD A TAG NEAR THE PAGER",
+                              PAGEROS_TOAST_INFO, 1800);
+                strncpy(s.nfc_status, "WAITING…", sizeof(s.nfc_status));
+                s.nfc_status[sizeof(s.nfc_status) - 1] = '\0';
+                render_screen();
+                return true;
+            }
             const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
             char href_buf[96];
             const char *href = focused_href(fr, s.vp_focus.widget_index,
@@ -933,11 +1934,27 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
                 mount_desktop();
                 return true;
             }
-            // Modal pages back-stack.
+            // Modal + built-in pages back-stack.
             switch (s.page) {
             case SHELL_PAGE_SETTINGS: mount_desktop();  dirty = true; break;
             case SHELL_PAGE_WIFI:
             case SHELL_PAGE_ADD_APP:  mount_settings(); dirty = true; break;
+            case SHELL_PAGE_NOTIF:
+            case SHELL_PAGE_QUICK:
+            case SHELL_PAGE_SYSMON:
+            case SHELL_PAGE_IDQR:
+            case SHELL_PAGE_NFC:
+            case SHELL_PAGE_NOTES_LIST:
+                mount_desktop();
+                dirty = true;
+                break;
+            case SHELL_PAGE_NOTES_EDIT:
+                notes_save_current();
+                pageros_toast("NOTE SAVED", PAGEROS_TOAST_OK, 1500);
+                notif_push("Note saved", PAGEROS_TOAST_OK);
+                mount_notes_list();
+                dirty = true;
+                break;
             default: break;
             }
         }
@@ -957,6 +1974,15 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
             pageros_audio_play_ui_click();
             if (s.page == SHELL_PAGE_WIFI)      handle_button_href("shell:wifi-connect");
             else if (s.page == SHELL_PAGE_ADD_APP) handle_button_href("shell:install");
+            else if (s.page == SHELL_PAGE_NOTES_EDIT) {
+                size_t L = strlen(s.text_buf);
+                if (L + 1 < s.text_cap) {
+                    s.text_buf[L] = '\n';
+                    s.text_buf[L + 1] = '\0';
+                    dirty = true;
+                }
+                if (dirty) render_screen();
+            }
             return true;
         }
         if (ch == 0) break;
@@ -983,6 +2009,56 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
 }
 
 // --- GPS callback ----------------------------------------------- //
+
+// --- NFC scan callback ----------------------------------------- //
+
+static void on_nfc_scan(const pageros_nfc_scan_t *scan, void *user)
+{
+    (void)user;
+    if (!scan || scan->uid_len == 0) return;
+    char uid_hex[32];
+    size_t off = 0;
+    int copy = scan->uid_len > 8 ? 8 : scan->uid_len;
+    for (int i = 0; i < copy && off + 3 < sizeof(uid_hex); i++) {
+        off += snprintf(uid_hex + off, sizeof(uid_hex) - off,
+                        "%02X%s", scan->uid[i], (i == copy - 1) ? "" : ":");
+    }
+    strncpy(s.nfc_last_uid, uid_hex, sizeof(s.nfc_last_uid) - 1);
+    s.nfc_last_uid[sizeof(s.nfc_last_uid) - 1] = '\0';
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "TAG %s", uid_hex);
+    notif_announce(msg, PAGEROS_TOAST_INFO, 2500);
+
+    // Persist the scan to /sd/nfc/<uid>.bin so the device builds a
+    // local library of seen tags. The first PAGEROS_NFC_MAX_UID_BYTES
+    // bytes are the UID, the rest are any NDEF payload.
+    if (pageros_storage_init() == ESP_OK) {
+        mkdir("/sd/nfc", 0777);
+        char path[96];
+        // Sanitised filename: strip colons.
+        char clean[32]; int ci = 0;
+        for (int i = 0; uid_hex[i] && ci < (int)sizeof(clean) - 1; i++) {
+            if (uid_hex[i] != ':') clean[ci++] = uid_hex[i];
+        }
+        clean[ci] = '\0';
+        snprintf(path, sizeof(path), "/sd/nfc/%s.bin", clean);
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            fwrite(scan->uid, 1, scan->uid_len, f);
+            if (scan->ndef_len > 0) {
+                fwrite(scan->ndef, 1, scan->ndef_len, f);
+            }
+            fclose(f);
+        }
+    }
+    if (s.page == SHELL_PAGE_NFC) {
+        strncpy(s.nfc_status, "SAVED TO /sd/nfc/",
+                sizeof(s.nfc_status) - 1);
+        s.nfc_status[sizeof(s.nfc_status) - 1] = '\0';
+        render_screen();
+    }
+}
 
 static void on_gps_fix(const pageros_gps_fix_t *fix, void *user_ctx)
 {
@@ -1258,19 +2334,23 @@ void app_main(void)
     pageros_fonts_init(NULL);
     pageros_apprt_init(NULL);
     pageros_shell_init();
+    lock_load_pin();
     boot_log_add(BL_OK, "[OK] FONTS + APPRT + SHELL");
     boot_splash_render();
 
     if (disp_err == ESP_OK) {
         (void)pageros_display_panel_reinit();
-        boot_log_add(BL_OK, "[OK] DESKTOP MOUNTING");
+        boot_log_add(BL_OK, s.lock_pin_required
+                                ? "[OK] LOCK SCREEN (PIN SET)"
+                                : "[OK] LOCK SCREEN (NO PIN)");
         boot_splash_render();
-        // Brief hold so the last log line reads before the desktop
-        // takes over — feels deliberate.
+        // Brief hold so the last log line reads before the lock takes
+        // over — feels deliberate.
         vTaskDelay(pdMS_TO_TICKS(600));
-        mount_desktop();
-        pageros_toast("WELCOME TO PAGEROS", PAGEROS_TOAST_INFO, 2200);
-        render_screen();
+        // Seed a welcome notif so the user sees something in NOTIFS
+        // first time they open it.
+        notif_push("PagerOS online", PAGEROS_TOAST_OK);
+        mount_lock();
     }
 
     esp_err_t gps_err = pageros_gps_init();
@@ -1292,6 +2372,15 @@ void app_main(void)
     if (imu_err != ESP_OK) {
         ESP_LOGW(TAG, "IMU init skipped: %s", esp_err_to_name(imu_err));
     }
+
+    // NFC bring-up + scan polling. Tags are saved to /sd/nfc/<uid>.bin.
+    esp_err_t nfc_err = pageros_nfc_init();
+    if (nfc_err == ESP_OK) {
+        pageros_nfc_start(on_nfc_scan, NULL);
+    } else {
+        ESP_LOGW(TAG, "NFC init skipped: %s", esp_err_to_name(nfc_err));
+    }
+
     pageros_power_init(NULL);
 
     if (input_err == ESP_OK || kbd_err == ESP_OK) {

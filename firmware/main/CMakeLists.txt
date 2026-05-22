@@ -24,6 +24,7 @@ idf_component_register(
         xl9555
         power
         audio
+        nfc
         nvs_flash
         app_update
         esp_hw_support
