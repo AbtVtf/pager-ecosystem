@@ -47,6 +47,10 @@ void pageros_router_event_from_input(pageros_router_event_t *out,
             out->kind   = PAGEROS_ROUTER_EVT_NAV;
             out->as.nav = PAGEROS_ROUTER_NAV_ENTER;
             return;
+        case PAGEROS_INPUT_ENTER_LONG:
+            out->kind   = PAGEROS_ROUTER_EVT_NAV;
+            out->as.nav = PAGEROS_ROUTER_NAV_ENTER_LONG;
+            return;
         case PAGEROS_INPUT_BACK:
             out->kind   = PAGEROS_ROUTER_EVT_NAV;
             out->as.nav = PAGEROS_ROUTER_NAV_BACK;

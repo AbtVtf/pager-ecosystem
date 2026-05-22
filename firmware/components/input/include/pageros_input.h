@@ -37,11 +37,12 @@ extern "C" {
 
 typedef enum {
     PAGEROS_INPUT_NONE = 0,
-    PAGEROS_INPUT_ROTARY_CW,   // one detent clockwise
-    PAGEROS_INPUT_ROTARY_CCW,  // one detent counter-clockwise
-    PAGEROS_INPUT_ENTER,       // rotary push released (after debounce)
-    PAGEROS_INPUT_BACK,        // BOOT button released, short press (< 1 s)
-    PAGEROS_INPUT_BACK_LONG,   // BOOT button held ≥ 1 s then released
+    PAGEROS_INPUT_ROTARY_CW,    // one detent clockwise
+    PAGEROS_INPUT_ROTARY_CCW,   // one detent counter-clockwise
+    PAGEROS_INPUT_ENTER,        // rotary push released, short press
+    PAGEROS_INPUT_ENTER_LONG,   // rotary push held ≥ 700 ms then released
+    PAGEROS_INPUT_BACK,         // BOOT button released, short press (< 1 s)
+    PAGEROS_INPUT_BACK_LONG,    // BOOT button held ≥ 1 s then released
 } pageros_input_event_t;
 
 // Bring up GPIO + the input task. Safe to call more than once (no-op after

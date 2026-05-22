@@ -32,6 +32,7 @@ typedef enum {
 typedef enum {
     PAGEROS_ROUTER_NAV_NONE = 0,
     PAGEROS_ROUTER_NAV_ENTER,
+    PAGEROS_ROUTER_NAV_ENTER_LONG,
     PAGEROS_ROUTER_NAV_BACK,
     PAGEROS_ROUTER_NAV_BACK_LONG,
 } pageros_router_nav_t;

@@ -150,7 +150,12 @@ static void handle_button(uint32_t pin, bool level, int64_t ts_us)
         emit(held_us >= BACK_LONG_HOLD_US ? PAGEROS_INPUT_BACK_LONG
                                           : PAGEROS_INPUT_BACK);
     } else {
-        emit(PAGEROS_INPUT_ENTER);
+        // Encoder click: short-press = ENTER, long-press = ENTER_LONG.
+        // 700 ms is short enough to feel deliberate (not accidental
+        // tap-and-hold) but long enough to avoid colliding with the
+        // normal click cadence when scrolling+selecting quickly.
+        emit(held_us >= 700000 ? PAGEROS_INPUT_ENTER_LONG
+                               : PAGEROS_INPUT_ENTER);
     }
 }
 

@@ -159,6 +159,13 @@ static struct {
     // --- Rail close-mode -------------------------------------------- //
     bool rail_close_mode;
 
+    // --- Drawer (sidebar rail visibility) --------------------------- //
+    //
+    // Toggled by long-press on the encoder. When false the rail is
+    // hidden and the viewport takes the full canvas width, so external
+    // apps can render edge-to-edge. Default = open.
+    bool drawer_open;
+
     // --- Per-app cache (state preserved across rail switches) ------ //
     struct app_cache {
         char     id[96];                  // "" = unused slot
@@ -178,7 +185,16 @@ static struct {
     .tile_index   = 0,
     .rail_index   = 0,
     .text_input_widget = -1,
+    .drawer_open  = true,
 };
+
+// Effective rail width — 0 when the drawer is closed, full width when
+// open. Used by every render function that lays out content next to
+// the rail; collapsing to 0 makes the viewport span the whole canvas.
+static inline int rail_width(void)
+{
+    return s.drawer_open ? PAGEROS_CHROME_RAIL_W : 0;
+}
 
 static void render_screen(void);
 
@@ -521,6 +537,7 @@ static void draw_chrome_bars(pageros_fonts_canvas_t *canvas,
 
 static void draw_rail(pageros_fonts_canvas_t *canvas)
 {
+    if (!s.drawer_open) return;
     pageros_chrome_rail_t rail = {
         .n_items     = s.rail_count,
         .focus_index = s.focus_mode == FOCUS_RAIL ? s.rail_index : -1,
@@ -550,10 +567,10 @@ static void render_desktop(pageros_fonts_canvas_t *canvas,
     draw_chrome_bars(canvas, cs);
     draw_rail(canvas);
 
-    // Tile-grid viewport: right of rail, between top/bot bars.
-    int vp_x = PAGEROS_CHROME_RAIL_W;
+    // Tile-grid viewport: right of rail (when drawer open), between top/bot bars.
+    int vp_x = rail_width();
     int vp_y = PAGEROS_CHROME_BAR_H;
-    int vp_w = canvas->w - PAGEROS_CHROME_RAIL_W;
+    int vp_w = canvas->w - rail_width();
     int vp_h = canvas->h - 2 * PAGEROS_CHROME_BAR_H;
 
     int focus = (s.focus_mode == FOCUS_VIEWPORT) ? s.tile_index : -1;
@@ -613,9 +630,9 @@ static void render_app(pageros_fonts_canvas_t *canvas,
         .canvas      = *canvas,
         .palette     = g_palette,
         .focus       = s.vp_focus,
-        .vx = PAGEROS_CHROME_RAIL_W,
+        .vx = rail_width(),
         .vy = PAGEROS_CHROME_BAR_H,
-        .vw = canvas->w - PAGEROS_CHROME_RAIL_W,
+        .vw = canvas->w - rail_width(),
         .vh = canvas->h - 2 * PAGEROS_CHROME_BAR_H,
         .skip_chrome = true,
         .title       = NULL,
@@ -713,7 +730,7 @@ static void render_notif(pageros_fonts_canvas_t *canvas,
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
     draw_rail(canvas);
 
-    int x = PAGEROS_CHROME_RAIL_W + 12;
+    int x = rail_width() + 12;
     int y = PAGEROS_CHROME_BAR_H + 8;
     const char *title = "NOTIFICATIONS";
     pageros_fonts_draw_text_16(canvas, x, y, title, -1, g_palette.accent,
@@ -768,7 +785,7 @@ static void render_quick(pageros_fonts_canvas_t *canvas,
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
     draw_rail(canvas);
 
-    int x = PAGEROS_CHROME_RAIL_W + 12;
+    int x = rail_width() + 12;
     int y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "QUICK SETTINGS", -1,
                                g_palette.accent, canvas->w - 20);
@@ -864,7 +881,7 @@ static void render_notes_list(pageros_fonts_canvas_t *canvas,
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
     draw_rail(canvas);
 
-    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = rail_width() + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "NOTES", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -899,7 +916,7 @@ static void render_notes_edit(pageros_fonts_canvas_t *canvas,
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
     draw_rail(canvas);
 
-    int x = PAGEROS_CHROME_RAIL_W + 8, y = PAGEROS_CHROME_BAR_H + 4;
+    int x = rail_width() + 8, y = PAGEROS_CHROME_BAR_H + 4;
     char hdr[64];
     snprintf(hdr, sizeof(hdr), "[%s]", s.notes_edit_filename);
     pageros_fonts_draw_text(canvas, x, y, hdr, -1, g_palette.accent,
@@ -952,7 +969,7 @@ static void render_sysmon(pageros_fonts_canvas_t *canvas,
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
     draw_rail(canvas);
 
-    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = rail_width() + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "SYSTEM MONITOR", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -1051,7 +1068,7 @@ static void render_idqr(pageros_fonts_canvas_t *canvas,
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
     draw_rail(canvas);
 
-    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = rail_width() + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "DEVICE IDENTITY", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -1152,7 +1169,7 @@ static void render_nfc(pageros_fonts_canvas_t *canvas,
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
     draw_rail(canvas);
 
-    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = rail_width() + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "NFC SCANNER", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -2051,6 +2068,21 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
         if (ev->as.nav == PAGEROS_ROUTER_NAV_BACK_LONG) {
             pageros_audio_play_ui_click();
             mount_desktop();
+            return true;
+        }
+        if (ev->as.nav == PAGEROS_ROUTER_NAV_ENTER_LONG) {
+            // Toggle the sidebar drawer. When it collapses we also
+            // bounce focus back into the viewport so the user isn't
+            // stranded on an invisible rail.
+            s.drawer_open = !s.drawer_open;
+            if (!s.drawer_open) {
+                s.focus_mode = FOCUS_VIEWPORT;
+                s.rail_close_mode = false;
+            }
+            pageros_audio_play_ui_click();
+            pageros_toast(s.drawer_open ? "DRAWER OPEN" : "DRAWER CLOSED",
+                          PAGEROS_TOAST_INFO, 1200);
+            render_screen();
             return true;
         }
         if (ev->as.nav == PAGEROS_ROUTER_NAV_ENTER) {
