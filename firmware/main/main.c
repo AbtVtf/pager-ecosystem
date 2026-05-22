@@ -182,7 +182,7 @@ static struct {
 
 static void render_screen(void);
 
-#define HUNT_PINS_MAX 4
+#define HUNT_PINS_MAX 2
 extern const int g_hunt_pins[HUNT_PINS_MAX];
 extern int       g_hunt_now[HUNT_PINS_MAX];
 
@@ -2288,9 +2288,14 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
 // them. Press the right button while running `idf.py monitor` and we
 // should see "hunt: GPIOxx → LOW" pop up.
 
-const int g_hunt_pins[HUNT_PINS_MAX] = { 9, 15, 16, 26 };
-static int g_hunt_last[HUNT_PINS_MAX] = { 1, 1, 1, 1 };
-int g_hunt_now[HUNT_PINS_MAX]  = { 1, 1, 1, 1 };
+// Conservative: only pins that are *definitely* not on the SPI PSRAM
+// or octal flash bus. GPIO 26-32 are PSRAM data lines on the ESP32-S3
+// module variant this board uses (touching them rebooted the device);
+// GPIO 9 sometimes hosts PSRAM data too. 15 + 16 are GPIO-only on
+// every ESP32-S3 variant we care about.
+const int g_hunt_pins[HUNT_PINS_MAX] = { 15, 16 };
+static int g_hunt_last[HUNT_PINS_MAX] = { 1, 1 };
+int g_hunt_now[HUNT_PINS_MAX]  = { 1, 1 };
 
 static void button_hunt_task(void *arg)
 {
