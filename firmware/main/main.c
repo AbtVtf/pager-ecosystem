@@ -217,21 +217,75 @@ static void render_foreground(void)
 // "shell key: row=X col=Y char='?'" log line on every press lets the
 // user correct the map if any key lands wrong. Unmapped cells return 0.
 
-// Update once we know the real cells: the back-arrow / delete key
-// should map to '\b' (0x08) so the input handler treats it as
-// backspace. Every key press logs its row/col over serial — press
-// the key you want to be backspace and tell me the numbers.
-static const char keymap_lower[4][10] = {
-    /* row 0 */ {'q','w','e','r','t','y','u','i','o','p'},
-    /* row 1 */ {'a','s','d','f','g','h','j','k','l', '\b'},
-    /* row 2 */ {'z','x','c','v','b','n','m',',','.',  0 },
-    /* row 3 */ { 0 , 0 ,' ', 0 , 0 , 0 , 0 ,'/','-', 0 },
+// LILYGO T-LoRa Pager keymap — verbatim from LilyGoLib's
+// `LilyGo_LoRa_Pager.cpp` rotation_config/keymap definitions
+// (the upstream library that drives the same TCA8418 matrix on the
+// same physical board). Their getKeyChar() uses
+// `row = k/10; col = k%10` where k is the TCA8418 raw FIFO value
+// (k = R*10 + C + 1, 1-indexed per the datasheet). Mirroring that
+// exact indexing here.
+static const char kb_keymap[4][10] = {
+    {'q','w','e','r','t','y','u','i','o','p'},
+    {'a','s','d','f','g','h','j','k','l','\n'},
+    { 0 ,'z','x','c','v','b','n','m', 0 , 0 },
+    {' ', 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 },
 };
 
-static char keymap_lookup(uint8_t row, uint8_t col)
+static const char kb_symbol_map[4][10] = {
+    {'1','2','3','4','5','6','7','8','9','0'},
+    {'*','/','+','-','=',':','\'','"','@', 0 },
+    { 0 ,'_','$',';','?','!',',','.', 0 , 0 },
+    {' ', 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 },
+};
+
+// Raw TCA8418 key values for the LILYGO modifier/control keys,
+// identified empirically by reading the serial log while pressing
+// each labelled keytop:
+//
+//   k=20 (row 1, col 9) — Enter
+//   k=21 (row 2, col 0) — Sym (toggles the symbol/number layer)
+//   k=29 (row 2, col 8) — Caps Lock
+//   k=30 (row 2, col 9) — Delete / Backspace
+//   k=31 (row 3, col 0) — Space (handled by keymap[3][0]=' ')
+//
+// LilyGoLib's published constants (0x1C / 0x1D / 0x1E) don't match
+// the printed labels on this revision of the T-LoRa Pager — the
+// values above are what actually fires on this device.
+#define KB_ENTER_K      20
+#define KB_SYMBOL_K     21
+#define KB_CAPS_K       29
+#define KB_BACKSPACE_K  30
+#define KB_ALT_K        0xFF   // unknown / not present on this layout
+
+// Sticky modifier state (toggled, not held).
+static bool g_caps_on   = false;
+static bool g_symbol_on = false;
+
+// Translate raw (row, col) from our TCA8418 driver into the
+// LilyGo-compatible FIFO key code, then return the resolved character.
+// Returns:
+//   '\b'  for backspace
+//   0     when the press is a modifier toggle (CAPS / SYM / ALT) or
+//         lands on an unmapped cell — caller treats 0 as "no input".
+static char kb_decode(uint8_t row, uint8_t col)
 {
     if (row >= 4 || col >= 10) return 0;
-    return keymap_lower[row][col];
+    uint8_t k = (uint8_t)(row * 10 + col + 1);
+    if (k == KB_CAPS_K)      { g_caps_on   = !g_caps_on;   return 0; }
+    if (k == KB_SYMBOL_K)    { g_symbol_on = !g_symbol_on; return 0; }
+    if (k == KB_ENTER_K)     return '\n';
+    if (k == KB_BACKSPACE_K) return '\b';
+    if (k == KB_ALT_K)       return 0;
+    // Index the keymap with the datasheet-correct (k-1)-based formula.
+    // LilyGoLib's stock getKeyChar uses k/10, k%10 which is off-by-one;
+    // the keymap rows here are laid out for the right formula so
+    // physical (R=0, C=0) -> keymap[0][0] -> 'q'.
+    uint8_t r = (k - 1) / 10;
+    uint8_t c = (k - 1) % 10;
+    if (r >= 4 || c >= 10) return 0;
+    char ch = g_symbol_on ? kb_symbol_map[r][c] : kb_keymap[r][c];
+    if (g_caps_on && ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+    return ch;
 }
 
 // --- Per-screen mount + emit helpers ------------------------------- //
@@ -270,14 +324,10 @@ static void mount_settings(void)
 
 static esp_err_t emit_wifi_thunk(uint8_t *b, size_t c, size_t *n)
 {
-    // Render the password as a row of dots so an over-the-shoulder
-    // look doesn't reveal it; the actual `s.psk` buffer keeps the
-    // plaintext for the eventual wifi_connect call.
-    char masked[sizeof(s.psk)];
-    size_t L = strlen(s.psk);
-    for (size_t i = 0; i < L && i + 1 < sizeof(masked); i++) masked[i] = '*';
-    masked[L < sizeof(masked) - 1 ? L : sizeof(masked) - 1] = '\0';
-    return pageros_shell_emit_wifi_config(b, c, n, s.ssid, masked, s.wifi_status);
+    // Show the password in cleartext — the 8x8 font is hard to read
+    // when masked with `*` so for the device's intended single-user
+    // hands-on flow plaintext is the better tradeoff.
+    return pageros_shell_emit_wifi_config(b, c, n, s.ssid, s.psk, s.wifi_status);
 }
 
 static void mount_wifi(void)
@@ -311,8 +361,12 @@ static void mount_add_app(void)
 {
     ESP_LOGI("shell", "mount_add_app");
     s.page = SHELL_PAGE_ADD_APP;
-    s.focus.widget_index = 3;       // URL input (heading=0, [notif?], hint, input, install, back)
-    if (s.addapp_msg[0]) s.focus.widget_index = 4;  // shift down if notif visible
+    // Body widget order: heading(0), [notif(1)?], hint, input, install, back.
+    // Without a notification the URL input sits at index 2; with one
+    // it shifts down to 3. Pin focus to the input so the user can
+    // start typing immediately.
+    int notif = s.addapp_msg[0] ? 1 : 0;
+    s.focus.widget_index = 2 + notif;
     s.focus.item_index = 0;
     s.text_input_widget = s.focus.widget_index;
     s.text_buf = s.url;
@@ -330,7 +384,7 @@ static void rebind_text_buf_for_focus(void)
         if (s.focus.widget_index == 2) { s.text_input_widget = 2; s.text_buf = s.ssid; s.text_cap = sizeof(s.ssid); }
         else if (s.focus.widget_index == 3) { s.text_input_widget = 3; s.text_buf = s.psk;  s.text_cap = sizeof(s.psk); }
     } else if (s.page == SHELL_PAGE_ADD_APP) {
-        int url_idx = s.addapp_msg[0] ? 4 : 3;
+        int url_idx = 2 + (s.addapp_msg[0] ? 1 : 0);
         if (s.focus.widget_index == url_idx) {
             s.text_input_widget = url_idx; s.text_buf = s.url; s.text_cap = sizeof(s.url);
         }
@@ -372,6 +426,18 @@ static void addapp_install(void)
         strncpy(s.addapp_msg_level, "warn", sizeof(s.addapp_msg_level));
         return;
     }
+    // Lazy SD mount — boot skips storage init to avoid SPI-bus glitches
+    // disturbing the display; mount on demand the first time the user
+    // actually needs to persist anything. Idempotent, so subsequent
+    // installs just return ESP_OK.
+    esp_err_t sm = pageros_storage_init();
+    if (sm != ESP_OK) {
+        snprintf(s.addapp_msg, sizeof(s.addapp_msg),
+                 "SD mount failed: %s", esp_err_to_name(sm));
+        strncpy(s.addapp_msg_level, "error", sizeof(s.addapp_msg_level));
+        s.addapp_msg_level[sizeof(s.addapp_msg_level) - 1] = '\0';
+        return;
+    }
     char app_id[PAGEROS_SIDELOAD_MAX_APP_ID];
     esp_err_t r = pageros_sideload_install_from_url(s.url, app_id, sizeof(app_id));
     if (r == ESP_OK) {
@@ -384,6 +450,83 @@ static void addapp_install(void)
         strncpy(s.addapp_msg_level, "error", sizeof(s.addapp_msg_level));
     }
     s.addapp_msg_level[sizeof(s.addapp_msg_level) - 1] = '\0';
+}
+
+// Load an installed app's base URL (saved by sideload as a .source_url
+// file in /sd/apps/<id>/), fetch its home Frame from <base>/, and
+// hand the bytes to apprt as the new foreground app. Notifications go
+// through the addapp message slot so the user sees errors on the same
+// row as the install ones.
+static void launch_app(const char *app_id)
+{
+    if (!app_id || !*app_id) return;
+    ESP_LOGI("shell", "launch_app: %s", app_id);
+
+    // Ensure SD is mounted (lazy — the apps dir lives on the card).
+    esp_err_t sm = pageros_storage_init();
+    if (sm != ESP_OK) {
+        snprintf(s.addapp_msg, sizeof(s.addapp_msg),
+                 "SD mount failed: %s", esp_err_to_name(sm));
+        strncpy(s.addapp_msg_level, "error", sizeof(s.addapp_msg_level));
+        return;
+    }
+
+    char url_path[256];
+    snprintf(url_path, sizeof(url_path), "%s/%s/.source_url",
+             PAGEROS_DIR_APPS, app_id);
+    FILE *f = fopen(url_path, "rb");
+    if (!f) {
+        snprintf(s.addapp_msg, sizeof(s.addapp_msg),
+                 "no .source_url for %s", app_id);
+        strncpy(s.addapp_msg_level, "warn", sizeof(s.addapp_msg_level));
+        return;
+    }
+    char base_url[160];
+    size_t base_len = fread(base_url, 1, sizeof(base_url) - 1, f);
+    fclose(f);
+    while (base_len > 0 && (base_url[base_len - 1] == '\n' ||
+                            base_url[base_len - 1] == '\r' ||
+                            base_url[base_len - 1] == ' ')) {
+        base_len--;
+    }
+    base_url[base_len] = '\0';
+
+    // Build "<base>/" — apps serve their home Frame at the root path.
+    char full_url[256];
+    int n = snprintf(full_url, sizeof(full_url), "%s%s",
+                     base_url,
+                     base_url[base_len - 1] == '/' ? "" : "/");
+    if (n < 0 || n >= (int)sizeof(full_url)) return;
+
+    ESP_LOGI("shell", "GET %s", full_url);
+
+    uint8_t *buf = (uint8_t *)malloc(8 * 1024);
+    if (!buf) return;
+    pageros_https_response_t r = {0};
+    esp_err_t e = pageros_https_get(full_url, buf, 8 * 1024, &r);
+    if (e != ESP_OK || r.status_code / 100 != 2 || r.body_len == 0) {
+        ESP_LOGW("shell", "fetch %s: e=%s status=%d body=%u",
+                 full_url, esp_err_to_name(e), r.status_code,
+                 (unsigned)r.body_len);
+        snprintf(s.addapp_msg, sizeof(s.addapp_msg),
+                 "fetch failed: %s (HTTP %d)",
+                 esp_err_to_name(e), r.status_code);
+        strncpy(s.addapp_msg_level, "error", sizeof(s.addapp_msg_level));
+        free(buf);
+        return;
+    }
+
+    // Hand the Frame to apprt as the foreground app, then render via
+    // the same path the Shell uses.
+    pageros_apprt_open(app_id, buf, r.body_len);
+    free(buf);
+    s.page = SHELL_PAGE_HOME;       // not Shell-internal — but reuses the renderer
+    s.focus.widget_index = 1;
+    s.focus.item_index = 0;
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_foreground();
+    ESP_LOGI("shell", "launched %s", app_id);
 }
 
 // Returns true if the href was recognised + acted on.
@@ -412,7 +555,7 @@ static bool handle_button_href(const char *href)
         return true;
     }
     if (strncmp(href, "open:", 5) == 0) {
-        ESP_LOGI("shell", "ENTER → open app %s (app launch TBD)", href + 5);
+        launch_app(href + 5);
         return true;
     }
     return false;
@@ -576,21 +719,31 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
         break;
     case PAGEROS_ROUTER_EVT_KEY: {
         if (!ev->as.key.pressed) return true;  // act on press, ignore release
-        char c = keymap_lookup(ev->as.key.row, ev->as.key.col);
-        ESP_LOGI("shell", "key r=%u c=%u ch='%c'(0x%02x)%s",
-                 ev->as.key.row, ev->as.key.col,
-                 (c >= 0x20 && c < 0x7f) ? c : '?', (unsigned)c,
-                 c == 0 ? " UNMAPPED" : "");
+        uint8_t r = ev->as.key.row;
+        uint8_t c_col = ev->as.key.col;
+        uint8_t raw_k = (uint8_t)(r * 10 + c_col + 1);
+        char ch = kb_decode(r, c_col);
+        ESP_LOGI("shell", "key r=%u c=%u k=%u ch='%c'(0x%02x) caps=%d sym=%d",
+                 r, c_col, raw_k,
+                 (ch >= 0x20 && ch < 0x7f) ? ch : '?',
+                 (unsigned)ch, g_caps_on, g_symbol_on);
         if (!s.text_buf) break;
-        if (c == '\b' || c == 0x7f) {            // Backspace key on the matrix
+        if (ch == '\b') {
             size_t L = strlen(s.text_buf);
             if (L > 0) { s.text_buf[L - 1] = '\0'; dirty = true; }
             break;
         }
-        if (c == 0) break;                       // unmapped — bubble to logs
+        if (ch == '\n') {
+            // Enter while a text field is focused → submit the form.
+            // Wi-Fi page: Connect. Add-app: Install. Otherwise: ignore.
+            if (s.page == SHELL_PAGE_WIFI)      handle_button_href("shell:wifi-connect");
+            else if (s.page == SHELL_PAGE_ADD_APP) handle_button_href("shell:install");
+            return true;
+        }
+        if (ch == 0) break;
         size_t L = strlen(s.text_buf);
         if (L + 1 < s.text_cap) {
-            s.text_buf[L] = c;
+            s.text_buf[L] = ch;
             s.text_buf[L + 1] = '\0';
             dirty = true;
         }
@@ -729,15 +882,19 @@ void app_main(void)
     // boot. Soft-fails — the shell renders a recovery screen when no
     // card is present (SPEC §7.2 step 4 + docs/user/troubleshooting),
     // and that's a shell-level concern, not the storage driver's.
-    esp_err_t sd_err = pageros_storage_init();
-    if (sd_err != ESP_OK) {
-        ESP_LOGW(TAG, "SD mount failed: %s — proceeding without SD",
-                 esp_err_to_name(sd_err));
-    }
-    // SD init pumps significant traffic on the shared SPI bus; the
-    // ST7796 has been observed to glitch its DISP_ON state during the
-    // SD card's init sequence even with CS deasserted. Re-arm it now.
-    if (disp_err == ESP_OK) (void)pageros_display_panel_reinit();
+    //
+    // *** TEMPORARY DIAGNOSTIC ***: SD init is causing the panel to go
+    // black or freeze the device even with display init first and the
+    // explicit CS=38 hold-HIGH trick. Skipping it for this build so we
+    // can prove the rest of the stack is fine; once we identify which
+    // SD code path is the culprit we'll re-enable it (likely lazy on
+    // first app install) and the conditional below comes out.
+    (void)0;  // SD init temporarily disabled — see note above
+    ESP_LOGW(TAG, "[diag] SD init skipped — shell + display work without it");
+    // (Panel re-arm moved to just before the first shell render so it
+    // runs AFTER every other SPI device on the shared bus — SX1262
+    // LoRa init and any SD retries — has finished talking. Re-arming
+    // here would be undone by LoRa init's traffic minutes later.)
 
     // Logger (FW-004). Initialise after storage so the first LOG_INFO
     // line lands on /sd/logs/pageros.log; falls back to console-only
@@ -806,6 +963,12 @@ void app_main(void)
     pageros_apprt_init(NULL);
     pageros_shell_init();
     if (disp_err == ESP_OK) {
+        // Re-arm the panel now — every SPI-on-shared-bus driver (SD,
+        // LoRa) has finished its init sequence. Any earlier panel
+        // reset would have been clobbered by their subsequent bus
+        // traffic. From this point on the only thing on SPI2 should
+        // be display present()s.
+        (void)pageros_display_panel_reinit();
         if (pageros_shell_mount_home() == ESP_OK) {
             pageros_widgets_palette_t pal;
             pageros_widgets_default_palette(&pal);

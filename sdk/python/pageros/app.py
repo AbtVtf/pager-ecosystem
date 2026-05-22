@@ -253,6 +253,20 @@ class App:
         query = parse_qs(url.query, keep_blank_values=True)
         header_map: Mapping[str, str] = headers or {}
 
+        # Auto-served sideload manifest (FW-034 / SPEC §10.1). PagerOS
+        # firmware fetches `<base>/.pageros/manifest.cbor` to discover
+        # the app id at install time. Apps without an explicit handler
+        # for that path get a minimal CBOR map containing the name as
+        # its id so the sideload flow works out of the box.
+        if method_norm == "GET" and route_path == "/.pageros/manifest.cbor":
+            from pageros.codec import encode_frame
+            manifest = {"id": self.name, "name": self.name, "v": 1}
+            return (
+                200,
+                {"Content-Type": "application/cbor"},
+                encode_frame(manifest),
+            )
+
         handler = self._routes.get((method_norm, route_path))
         if handler is None:
             # Distinguish 405 (path exists for another method) from 404

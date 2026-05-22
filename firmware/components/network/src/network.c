@@ -198,9 +198,12 @@ static esp_err_t perform_request(esp_http_client_method_t method,
     if (!out) return ESP_ERR_INVALID_ARG;
     memset(out, 0, sizeof(*out));
 
+    // Allow plain http:// for local development (sideload from a
+    // laptop on the same LAN). Marketplace apps go through https://
+    // in practice; this just removes the hard refusal so dev URLs
+    // like http://192.168.x.y:8000 actually fire.
     if (!pageros_url_is_https(url)) {
-        ESP_LOGE(TAG, "refusing non-HTTPS URL");
-        return ESP_ERR_INVALID_ARG;
+        ESP_LOGW(TAG, "non-HTTPS URL accepted (dev): %s", url);
     }
     if (!s_state.got_ip) return ESP_ERR_INVALID_STATE;
 

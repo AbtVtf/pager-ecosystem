@@ -60,20 +60,20 @@ static struct {
     esp_lcd_panel_handle_t    panel;
     uint16_t              *framebuffer;   // CPU-side, host-endian RGB565
     uint16_t              *wire_buf;      // SPI-side, big-endian RGB565
+    SemaphoreHandle_t     band_done;      // signals one band fully DMA'd to panel
 } s_state;
 
-// IDF's esp_lcd_panel_io_spi reclaims a descriptor from its internal
-// pool inside the SPI completion callback chain — but only if a
-// user `on_color_trans_done` is registered. Without one, descriptors
-// leak and trans_pool drains until the next color_tx fails to grab
-// a slot ("spi transmit (queue) color failed"). This no-op handler
-// keeps the reclaim path alive without any actual notification.
-static bool IRAM_ATTR panel_io_trans_done_noop(esp_lcd_panel_io_handle_t io,
-                                               esp_lcd_panel_io_event_data_t *edata,
-                                               void *user_ctx)
+// Per-band completion callback. Fires from the SPI ISR after each
+// draw_bitmap chunk finishes; present() waits on band_done before
+// overwriting wire_buf with the next band's pixels.
+static bool IRAM_ATTR on_color_band_done(esp_lcd_panel_io_handle_t io,
+                                         esp_lcd_panel_io_event_data_t *edata,
+                                         void *user_ctx)
 {
     (void)io; (void)edata; (void)user_ctx;
-    return false;
+    BaseType_t hpw = pdFALSE;
+    if (s_state.band_done) xSemaphoreGiveFromISR(s_state.band_done, &hpw);
+    return hpw == pdTRUE;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +142,19 @@ esp_err_t pageros_display_init(void)
 {
     if (s_state.ready) return ESP_OK;
 
+    // Explicitly park CS=38 and DC=37 in their idle states BEFORE the
+    // SPI bus comes up. LilyGoLib's display init does the same — it
+    // means any subsequent SPI traffic from SD or LoRa (which share
+    // the bus) reaches the bus with the panel deselected, regardless
+    // of how long the panel_io takes to claim the pins.
+    gpio_config_t cs_cfg = {
+        .pin_bit_mask = (1ULL << DISP_PIN_CS) | (1ULL << DISP_PIN_DC),
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&cs_cfg);
+    gpio_set_level(DISP_PIN_CS, 1);   // HIGH = deselected
+    gpio_set_level(DISP_PIN_DC, 1);
+
     ESP_RETURN_ON_ERROR(spi_bus_up_once(), TAG, "spi");
     ESP_RETURN_ON_ERROR(backlight_init(), TAG, "backlight");
 
@@ -150,15 +163,18 @@ esp_err_t pageros_display_init(void)
         .dc_gpio_num         = DISP_PIN_DC,
         .spi_mode            = 0,
         .pclk_hz             = DISP_PIXEL_CLK_HZ,
-        .trans_queue_depth   = 32,
+        .trans_queue_depth   = 4,
         .lcd_cmd_bits        = 8,
         .lcd_param_bits      = 8,
-        .on_color_trans_done = panel_io_trans_done_noop,
+        .on_color_trans_done = on_color_band_done,
     };
     ESP_RETURN_ON_ERROR(
         esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)DISP_SPI_HOST,
                                   &io_cfg, &s_state.io),
         TAG, "panel io");
+    s_state.band_done = xSemaphoreCreateBinary();
+    if (!s_state.band_done) return ESP_ERR_NO_MEM;
+    xSemaphoreGive(s_state.band_done);  // start "available" so first take succeeds
 
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = DISP_PIN_RST,
@@ -239,6 +255,10 @@ esp_err_t pageros_display_shutdown(void)
     if (s_state.wire_buf) {
         heap_caps_free(s_state.wire_buf);
         s_state.wire_buf = NULL;
+    }
+    if (s_state.band_done) {
+        vSemaphoreDelete(s_state.band_done);
+        s_state.band_done = NULL;
     }
     s_state.ready = false;
     return ESP_OK;
@@ -332,14 +352,23 @@ esp_err_t pageros_display_present(void)
         return ESP_ERR_INVALID_STATE;
 
     // Stream the framebuffer to the panel in CHUNK_ROWS-tall bands.
-    // Each band fits in the small DMA-capable wire buffer. ST7796
-    // over SPI expects RGB565 big-endian; the framebuffer stores
-    // host-endian uint16_t so we byte-swap as we copy.
+    // Each band fits in the small DMA-capable wire buffer; we wait
+    // for the previous band's transmission to fully drain before
+    // overwriting the buffer for the next band, otherwise the SPI
+    // DMA would read half-mutated pixels and the panel shows
+    // doubled / ghosted content.
     const int H = PAGEROS_DISPLAY_HEIGHT;
     const int W = PAGEROS_DISPLAY_WIDTH;
     for (int y = 0; y < H; y += PAGEROS_DISPLAY_CHUNK_ROWS) {
         int rows = (y + PAGEROS_DISPLAY_CHUNK_ROWS <= H)
                        ? PAGEROS_DISPLAY_CHUNK_ROWS : (H - y);
+        // Wait for the previous band's DMA to complete. On timeout
+        // (SPI bus glitched, e.g. user just inserted the SD card)
+        // assume the trans was lost, log it, and continue — never
+        // hang the shell on a stalled DMA.
+        if (xSemaphoreTake(s_state.band_done, pdMS_TO_TICKS(200)) != pdTRUE) {
+            ESP_LOGW(TAG, "band_done timeout at y=%d (DMA stalled?)", y);
+        }
         const uint16_t *src = s_state.framebuffer + y * W;
         uint16_t       *dst = s_state.wire_buf;
         size_t n = (size_t)W * rows;
@@ -351,8 +380,17 @@ esp_err_t pageros_display_present(void)
         if (r != ESP_OK) {
             ESP_LOGW(TAG, "draw_bitmap band y=%d returned %s",
                      y, esp_err_to_name(r));
+            // Re-arm the semaphore so subsequent presents aren't
+            // permanently stuck waiting for a callback that won't fire.
+            xSemaphoreGive(s_state.band_done);
             return r;
         }
     }
+    // Wait for the final band to land before returning so callers can
+    // safely overwrite the framebuffer + we leave band_done in the
+    // "given" state for the next present. Timeout-tolerant: never
+    // block the shell on a stalled DMA.
+    (void)xSemaphoreTake(s_state.band_done, pdMS_TO_TICKS(200));
+    xSemaphoreGive(s_state.band_done);
     return ESP_OK;
 }

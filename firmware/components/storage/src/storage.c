@@ -163,8 +163,12 @@ static esp_err_t xl_card_present(bool *present)
 static int mkdir_one(const char *prefix, void *ctx)
 {
     (void)ctx;
+    // The FAT mount root (`/sd`) can't be mkdir'd — esp_vfs returns
+    // EINVAL because that's the mount point itself, not a directory
+    // the filesystem owns. Treat it as already-existing.
+    if (strcmp(prefix, PAGEROS_SD_MOUNT) == 0) return 0;
     if (mkdir(prefix, 0755) == 0) return 0;
-    if (errno == EEXIST) return 0;
+    if (errno == EEXIST || errno == EINVAL) return 0;
     ESP_LOGE(TAG, "mkdir(%s) failed: %s", prefix, strerror(errno));
     return -1;
 }

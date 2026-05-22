@@ -54,3 +54,10 @@ CONFIG_FREERTOS_HZ=1000
 # the right default since PagerOS apps can be hosted anywhere.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# FATFS Long File Names — needed so the sideload code can write
+# `manifest.cbor` (13 chars) and so directory names come back in
+# their original case rather than uppercase 8.3 short names.
+CONFIG_FATFS_LFN_NONE=n
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255

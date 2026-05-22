@@ -167,7 +167,11 @@ esp_err_t pageros_router_init(void)
     }
 
     s_state.shutdown = false;
-    BaseType_t ok = xTaskCreate(router_task, "router", 3072, NULL, 6,
+    // Larger stack so the shell handler can do heavy work inline —
+    // SD mount, HTTPS fetch (mbedTLS + crt bundle), CBOR parse,
+    // widget render. Stock 3 KB overflows the moment `addapp_install`
+    // touches the network stack.
+    BaseType_t ok = xTaskCreate(router_task, "router", 12 * 1024, NULL, 6,
                                 &s_state.task);
     if (ok != pdPASS) {
         if (s_state.input_q) xQueueRemoveFromSet(s_state.input_q, s_state.qset);

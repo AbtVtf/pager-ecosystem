@@ -3,6 +3,7 @@
 
 #include "pageros_sideload.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,33 +54,53 @@ esp_err_t pageros_sideload_install_from_url(const char *url,
     uint8_t *buf = (uint8_t *)malloc(PAGEROS_SIDELOAD_MAX_MANIFEST);
     if (!buf) return ESP_ERR_NO_MEM;
     pageros_https_response_t r = {0};
+    ESP_LOGI(TAG, "GET %s", full_url);
     esp_err_t e = pageros_https_get(full_url, buf, PAGEROS_SIDELOAD_MAX_MANIFEST, &r);
+    ESP_LOGI(TAG, "fetch result: e=%s status=%d body=%u%s",
+             esp_err_to_name(e), r.status_code, (unsigned)r.body_len,
+             r.body_truncated ? " TRUNCATED" : "");
     if (e != ESP_OK || r.status_code / 100 != 2) {
-        ESP_LOGW(TAG, "fetch %s: e=%s status=%d", full_url, esp_err_to_name(e), r.status_code);
         free(buf);
         return e != ESP_OK ? e : ESP_FAIL;
     }
     size_t mlen = r.body_len < PAGEROS_SIDELOAD_MAX_MANIFEST ? r.body_len : PAGEROS_SIDELOAD_MAX_MANIFEST;
 
     char app_id[PAGEROS_SIDELOAD_MAX_APP_ID];
-    if (extract_app_id(buf, mlen, app_id, sizeof(app_id)) < 0) {
+    int id_len = extract_app_id(buf, mlen, app_id, sizeof(app_id));
+    if (id_len < 0) {
+        ESP_LOGW(TAG, "extract_app_id failed; first 16 bytes:");
+        for (size_t i = 0; i < (mlen < 16 ? mlen : 16); i++) {
+            ESP_LOGW(TAG, "  [%u]=0x%02x", (unsigned)i, buf[i]);
+        }
         free(buf); return ESP_ERR_INVALID_RESPONSE;
     }
+    ESP_LOGI(TAG, "extracted app_id='%s'", app_id);
 
-    // Write to /apps/<id>/manifest.cbor and a tag file.
     char dir[256], path[300];
     snprintf(dir, sizeof(dir), "%s/%s", PAGEROS_DIR_APPS, app_id);
-    pageros_storage_mkdir_p(dir);
+    esp_err_t mk = pageros_storage_mkdir_p(dir);
+    ESP_LOGI(TAG, "mkdir %s: %s", dir, esp_err_to_name(mk));
     snprintf(path, sizeof(path), "%s/manifest.cbor", dir);
     FILE *f = fopen(path, "wb");
-    if (!f) { free(buf); return ESP_FAIL; }
-    fwrite(buf, 1, mlen, f);
+    if (!f) {
+        ESP_LOGW(TAG, "fopen %s failed: %s", path, strerror(errno));
+        free(buf); return ESP_FAIL;
+    }
+    size_t wrote = fwrite(buf, 1, mlen, f);
     fclose(f);
+    ESP_LOGI(TAG, "wrote %u/%u bytes to %s", (unsigned)wrote, (unsigned)mlen, path);
     free(buf);
 
     snprintf(path, sizeof(path), "%s/.sideloaded", dir);
     f = fopen(path, "wb");
     if (f) { fclose(f); }
+
+    // Persist the user-supplied base URL so the app launcher can fetch
+    // Frames from it later (the manifest itself doesn't include the
+    // URL because that depends on where the user is hosting the app).
+    snprintf(path, sizeof(path), "%s/.source_url", dir);
+    f = fopen(path, "wb");
+    if (f) { fwrite(url, 1, strlen(url), f); fclose(f); }
 
     strncpy(out_app_id, app_id, cap - 1);
     out_app_id[cap - 1] = '\0';
