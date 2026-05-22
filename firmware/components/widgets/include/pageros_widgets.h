@@ -169,6 +169,7 @@ typedef struct {
     // -1 means the rail isn't focused right now (the viewport is).
     int   focus_index;
     bool  rail_active;            // true: rail focus highlights tinted accent
+    bool  close_mode;             // SPACE-toggled: ENTER closes instead of switches
 } pageros_chrome_rail_t;
 
 // 80 px-wide left rail spanning the body region (between top/bot bars).

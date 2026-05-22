@@ -30,7 +30,11 @@ extern "C" {
 #endif
 
 // Sample format the audio driver expects from callers.
-#define PAGEROS_AUDIO_SAMPLE_RATE  8000
+// 22.05 kHz is a sweet spot for the ES8311 + this speaker — telephone-
+// grade 8 kHz cut off everything above 4 kHz which made clicks sound
+// muddy. 22.05 kHz captures the full audible band of short FX without
+// pushing the codec into rates it sometimes glitches on.
+#define PAGEROS_AUDIO_SAMPLE_RATE  22050
 #define PAGEROS_AUDIO_BIT_DEPTH    16
 #define PAGEROS_AUDIO_CHANNELS     1
 

@@ -63,31 +63,117 @@ static struct {
     TaskHandle_t  ui_task;
 } g = { .volume = 240 };
 
-// --- ES8311 minimal init -------------------------------------------- //
+// --- ES8311 init ---------------------------------------------------- //
+//
+// Ported from LilyGoLib's vendored esp_codec_dev/es8311.c — the minimal
+// register-poke we had before set the codec into a state where the I2S
+// stream still ran but never made it past the DAC mute / amp routing,
+// so the speaker was effectively muted. This version walks the same
+// open() + start() + sample-rate config the working LilyGo MVP uses,
+// hardcoded for our fixed config:
+//
+//   - slave mode (ESP32 is I2S master + MCLK source)
+//   - use_mclk = true (we drive MCLK from GPIO 10 → 256 × Fs = 2.048 MHz)
+//   - DAC-only path (PA powered via XL9555_AMP_EN, already on at boot)
+//   - 8 kHz / 16-bit / mono
 
 static esp_err_t es8311_w(uint8_t reg, uint8_t val)
 {
     return pageros_i2c_reg_write8(ES8311_I2C_ADDR, reg, val);
 }
 
+#define CHK(call) do { esp_err_t _r = (call); if (_r != ESP_OK) return _r; } while (0)
+
 static esp_err_t es8311_init(void)
 {
-    // Power on + clock setup. Values match the reference 8 kHz mono
-    // playback sequence from esp_codec_dev/es8311.
-    esp_err_t r;
-    if ((r = es8311_w(0x00, 0x1F)) != ESP_OK) return r;  // reset
-    vTaskDelay(pdMS_TO_TICKS(10));
-    if ((r = es8311_w(0x00, 0x00)) != ESP_OK) return r;  // out of reset
+    // ---- open() sequence -------------------------------------------- //
 
-    if ((r = es8311_w(0x01, 0x30)) != ESP_OK) return r;  // clk on, BCLK provider
-    if ((r = es8311_w(0x02, 0x10)) != ESP_OK) return r;  // 8k
-    if ((r = es8311_w(0x03, 0x10)) != ESP_OK) return r;  // 256x oversample
-    if ((r = es8311_w(0x16, 0x24)) != ESP_OK) return r;  // dac soft ramp on
-    if ((r = es8311_w(0x44, 0x08)) != ESP_OK) return r;  // dac mute off
-    if ((r = es8311_w(0x32, 0xFF)) != ESP_OK) return r;  // dac volume = +5 dB (max)
-    if ((r = es8311_w(0x37, 0x08)) != ESP_OK) return r;  // headphone path on
+    // I2C noise immunity (datasheet recommends writing REG44 twice
+    // before any other config — the LilyGo driver does this verbatim).
+    CHK(es8311_w(0x44, 0x08));
+    CHK(es8311_w(0x44, 0x08));
+
+    // Clock manager skeleton — REG01..05.
+    CHK(es8311_w(0x01, 0x30));    // clk on, BCLK divider master path
+    CHK(es8311_w(0x02, 0x00));    // pre_div / pre_multi set by sample config below
+    CHK(es8311_w(0x03, 0x10));    // base value; sample config overwrites high bits
+    CHK(es8311_w(0x16, 0x24));    // ADC soft ramp on
+    CHK(es8311_w(0x04, 0x10));    // base value; sample config overwrites
+    CHK(es8311_w(0x05, 0x00));    // adc_div=1, dac_div=1
+
+    // System bring-up.
+    CHK(es8311_w(0x0B, 0x00));
+    CHK(es8311_w(0x0C, 0x00));
+    CHK(es8311_w(0x10, 0x1F));    // ANA power on
+    CHK(es8311_w(0x11, 0x7F));    // ANA reference enable
+    CHK(es8311_w(0x00, 0x80));    // chip power on
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    // Slave mode: REG00 bit 6 = 0. We just wrote 0x80, so it's already slave.
+    // Confirm the value explicitly.
+    CHK(es8311_w(0x00, 0x80));
+
+    // MCLK selection: REG01 — use_mclk=true (bit 7=0), invert_mclk=false (bit 6=0).
+    // LilyGo driver writes 0x3F here.
+    CHK(es8311_w(0x01, 0x3F));
+
+    // SCLK normal polarity: REG06 bit 5 = 0. Read-modify-write.
+    // We don't have a read helper here — write a known-good baseline.
+    // (LilyGo: reads then clears bit 5; for our slave-mode + master-MCLK
+    // config the default-after-reset value is already 0.)
+    // No-op here.
+
+    CHK(es8311_w(0x13, 0x10));    // ADC PGA, DAC reference
+    CHK(es8311_w(0x1B, 0x0A));    // ADC HPF
+    CHK(es8311_w(0x1C, 0x6A));    // ADC PGA gain
+
+    // ADCL+DACR internal reference — required for proper DAC routing
+    // when there's no mic feedback path.
+    CHK(es8311_w(0x44, 0x58));
+
+    // ---- sample rate (5.6448 MHz MCLK / 22.05 kHz Fs) --------------- //
+    //
+    // Coefficients from the LilyGo clock table entry
+    //   {5644800, 22050, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0xff, 0x04, 0x10, 0x10}
+    // The only field that changes versus the 8 kHz entry is the codec
+    // bclk_div (0x20 → 0x10); everything else stays identical because
+    // the I2S master scales BCLK linearly with sample rate.
+
+    CHK(es8311_w(0x02, 0x00));
+    CHK(es8311_w(0x05, 0x00));
+    CHK(es8311_w(0x03, 0x00));
+    CHK(es8311_w(0x04, 0xFF));
+    CHK(es8311_w(0x07, 0x04));
+    CHK(es8311_w(0x08, 0x10));
+    CHK(es8311_w(0x06, 0x10));
+
+    // ---- start() sequence ------------------------------------------- //
+    //
+    // Brings up the DAC + audio routing. For our DAC-only mode the
+    // SDPIN format is "use 16-bit normal I2S" (bit 6 cleared) so the
+    // playback path reaches the DAC at all.
+
+    CHK(es8311_w(0x09, 0x00));    // SDPIN (DAC) iface: I2S 16-bit, DAC enabled
+    CHK(es8311_w(0x0A, 0x00));    // SDPOUT (ADC) iface — we don't use ADC
+    CHK(es8311_w(0x17, 0xBF));    // ADC volume (irrelevant, but matches ref)
+    CHK(es8311_w(0x0E, 0x02));
+    CHK(es8311_w(0x12, 0x00));
+    CHK(es8311_w(0x14, 0x1A));
+    CHK(es8311_w(0x0D, 0x01));
+    CHK(es8311_w(0x15, 0x40));    // ADC settings
+    CHK(es8311_w(0x37, 0x08));    // DAC mute off + ramp
+    CHK(es8311_w(0x45, 0x00));    // GP
+
+    // ---- DAC volume — max ------------------------------------------- //
+    // REG32 = 0xBF is ~0 dB (LilyGo default). 0xFF is +5 dB max. We've
+    // already pre-boosted the source PCM in ffmpeg, so 0xBF gives a
+    // clean signal; bump to 0xFF if the speaker is still too quiet.
+    CHK(es8311_w(0x32, 0xFF));
+
     return ESP_OK;
 }
+
+#undef CHK
 
 // --- Tone generation ----------------------------------------------- //
 
@@ -170,7 +256,12 @@ esp_err_t pageros_audio_init(void)
     }
 
     // I2S TX channel — pins per LILYGO authoritative variant.
+    // `auto_clear_after_cb = true` makes the DMA push silence whenever
+    // there's no fresh user data, instead of looping the last buffer.
+    // Without this the speaker re-plays the previous click forever
+    // because the codec keeps clocking out whatever's in DMA RAM.
     i2s_chan_config_t ch_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
+    ch_cfg.auto_clear_after_cb = true;
     r = i2s_new_channel(&ch_cfg, &g.tx_chan, NULL);
     if (r != ESP_OK) return r;
 

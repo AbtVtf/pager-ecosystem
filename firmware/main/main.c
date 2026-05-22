@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+#include "driver/gpio.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
@@ -155,6 +156,20 @@ static struct {
     char nfc_last_uid[32];
     char nfc_status[64];
 
+    // --- Rail close-mode -------------------------------------------- //
+    bool rail_close_mode;
+
+    // --- Per-app cache (state preserved across rail switches) ------ //
+    struct app_cache {
+        char     id[96];                  // "" = unused slot
+        bool     is_builtin;              // true → use last_page; false → frame_bytes
+        uint8_t *frame_bytes;             // owned, malloc'd; external apps only
+        size_t   frame_len;
+        int      last_page;               // shell_page_t; built-in's last sub-page
+        pageros_widgets_focus_t vp_focus;
+        int64_t  last_touched_us;
+    } app_cache[6];
+
     // Chrome cache — system uptime at boot, used for the clock display.
     uint64_t boot_unix_us;
 } s = {
@@ -166,6 +181,10 @@ static struct {
 };
 
 static void render_screen(void);
+
+#define HUNT_PINS_MAX 4
+extern const int g_hunt_pins[HUNT_PINS_MAX];
+extern int       g_hunt_now[HUNT_PINS_MAX];
 
 // --- Notifications ring buffer ------------------------------------- //
 //
@@ -237,6 +256,126 @@ static esp_err_t lock_save_pin(const char *pin)
     nvs_commit(h);
     nvs_close(h);
     return ESP_OK;
+}
+
+// --- App cache + state preservation -------------------------------- //
+//
+// Rail-driven switching pretends each "open" app stays alive, but apprt
+// only has one foreground slot at a time. The cache backs that illusion:
+// when the user switches away from app X, we snapshot X's frame bytes
+// (or current built-in sub-page) into a slot keyed by id; when they come
+// back to X, we restore from the slot instead of re-fetching.
+
+#define APP_CACHE_MAX (int)(sizeof(s.app_cache) / sizeof(s.app_cache[0]))
+
+static struct app_cache *cache_find(const char *id)
+{
+    if (!id || !*id) return NULL;
+    for (int i = 0; i < APP_CACHE_MAX; i++) {
+        if (s.app_cache[i].id[0] != '\0'
+                && strcmp(s.app_cache[i].id, id) == 0) {
+            return &s.app_cache[i];
+        }
+    }
+    return NULL;
+}
+
+static void cache_free_slot(struct app_cache *slot)
+{
+    if (!slot) return;
+    if (slot->frame_bytes) {
+        free(slot->frame_bytes);
+        slot->frame_bytes = NULL;
+    }
+    slot->frame_len = 0;
+    slot->id[0] = '\0';
+    slot->is_builtin = false;
+    slot->last_page = 0;
+    memset(&slot->vp_focus, 0, sizeof(slot->vp_focus));
+    slot->last_touched_us = 0;
+}
+
+static struct app_cache *cache_alloc(const char *id, bool is_builtin)
+{
+    if (!id || !*id) return NULL;
+    struct app_cache *existing = cache_find(id);
+    if (existing) {
+        existing->last_touched_us = esp_timer_get_time();
+        return existing;
+    }
+    // Empty slot.
+    for (int i = 0; i < APP_CACHE_MAX; i++) {
+        if (s.app_cache[i].id[0] == '\0') {
+            strncpy(s.app_cache[i].id, id, sizeof(s.app_cache[i].id) - 1);
+            s.app_cache[i].id[sizeof(s.app_cache[i].id) - 1] = '\0';
+            s.app_cache[i].is_builtin = is_builtin;
+            s.app_cache[i].last_touched_us = esp_timer_get_time();
+            return &s.app_cache[i];
+        }
+    }
+    // LRU eviction.
+    int oldest = 0;
+    for (int i = 1; i < APP_CACHE_MAX; i++) {
+        if (s.app_cache[i].last_touched_us < s.app_cache[oldest].last_touched_us) {
+            oldest = i;
+        }
+    }
+    cache_free_slot(&s.app_cache[oldest]);
+    strncpy(s.app_cache[oldest].id, id, sizeof(s.app_cache[oldest].id) - 1);
+    s.app_cache[oldest].id[sizeof(s.app_cache[oldest].id) - 1] = '\0';
+    s.app_cache[oldest].is_builtin = is_builtin;
+    s.app_cache[oldest].last_touched_us = esp_timer_get_time();
+    return &s.app_cache[oldest];
+}
+
+// Identify the cache id of whatever is foregrounded right now. NULL
+// means "not cacheable" (desktop, settings, wifi, addapp, lock, etc.)
+static const char *current_cache_id(bool *out_is_builtin)
+{
+    if (out_is_builtin) *out_is_builtin = false;
+    switch (s.page) {
+    case SHELL_PAGE_APP:
+        return pageros_apprt_foreground_id();
+    case SHELL_PAGE_NOTES_LIST:
+    case SHELL_PAGE_NOTES_EDIT:
+        if (out_is_builtin) *out_is_builtin = true;
+        return "builtin:notes";
+    case SHELL_PAGE_SYSMON:
+        if (out_is_builtin) *out_is_builtin = true;
+        return "builtin:sysmon";
+    case SHELL_PAGE_IDQR:
+        if (out_is_builtin) *out_is_builtin = true;
+        return "builtin:idqr";
+    case SHELL_PAGE_NFC:
+        if (out_is_builtin) *out_is_builtin = true;
+        return "builtin:nfc";
+    case SHELL_PAGE_NOTIF:
+        if (out_is_builtin) *out_is_builtin = true;
+        return "builtin:notif";
+    case SHELL_PAGE_QUICK:
+        if (out_is_builtin) *out_is_builtin = true;
+        return "builtin:quick";
+    default:
+        return NULL;
+    }
+}
+
+static void cache_snapshot_current(void)
+{
+    bool is_builtin = false;
+    const char *id = current_cache_id(&is_builtin);
+    if (!id || !*id) return;
+    struct app_cache *slot = cache_alloc(id, is_builtin);
+    if (!slot) return;
+    slot->vp_focus = s.vp_focus;
+    slot->last_page = (int)s.page;
+    slot->last_touched_us = esp_timer_get_time();
+    if (!is_builtin) {
+        // External app — also keep the raw frame bytes so we can rehydrate
+        // apprt without a network round-trip. We don't have direct access
+        // to apprt's internal raw buffer, so this gets populated by the
+        // launch path that fetched the bytes in the first place.
+    }
 }
 
 // --- Chrome state collection -------------------------------------- //
@@ -386,6 +525,7 @@ static void draw_rail(pageros_fonts_canvas_t *canvas)
         .n_items     = s.rail_count,
         .focus_index = s.focus_mode == FOCUS_RAIL ? s.rail_index : -1,
         .rail_active = s.focus_mode == FOCUS_RAIL,
+        .close_mode  = s.rail_close_mode && s.focus_mode == FOCUS_RAIL,
     };
     for (int i = 0; i < s.rail_count; i++) {
         rail.items[i] = s.rail_items[i];
@@ -571,8 +711,9 @@ static void render_notif(pageros_fonts_canvas_t *canvas,
     cs->focused_label = NULL;
     pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
 
-    int x = 12;
+    int x = PAGEROS_CHROME_RAIL_W + 12;
     int y = PAGEROS_CHROME_BAR_H + 8;
     const char *title = "NOTIFICATIONS";
     pageros_fonts_draw_text_16(canvas, x, y, title, -1, g_palette.accent,
@@ -625,8 +766,9 @@ static void render_quick(pageros_fonts_canvas_t *canvas,
     cs->focused_label = NULL;
     pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
 
-    int x = 12;
+    int x = PAGEROS_CHROME_RAIL_W + 12;
     int y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "QUICK SETTINGS", -1,
                                g_palette.accent, canvas->w - 20);
@@ -720,8 +862,9 @@ static void render_notes_list(pageros_fonts_canvas_t *canvas,
     cs->focused_label = NULL;
     pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
 
-    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "NOTES", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -754,8 +897,9 @@ static void render_notes_edit(pageros_fonts_canvas_t *canvas,
     cs->focused_label = NULL;
     pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
 
-    int x = 8, y = PAGEROS_CHROME_BAR_H + 4;
+    int x = PAGEROS_CHROME_RAIL_W + 8, y = PAGEROS_CHROME_BAR_H + 4;
     char hdr[64];
     snprintf(hdr, sizeof(hdr), "[%s]", s.notes_edit_filename);
     pageros_fonts_draw_text(canvas, x, y, hdr, -1, g_palette.accent,
@@ -806,8 +950,9 @@ static void render_sysmon(pageros_fonts_canvas_t *canvas,
     cs->focused_label = NULL;
     pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
 
-    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "SYSTEM MONITOR", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -878,6 +1023,23 @@ static void render_sysmon(pageros_fonts_canvas_t *canvas,
     // Open apps
     snprintf(buf, sizeof(buf), "OPEN APPS %d", s.rail_count);
     pageros_fonts_draw_text(canvas, x, y, buf, -1, g_palette.fg, canvas->w);
+    y += line_h;
+
+    // GPIO hunter — live levels of the candidate "right button" pins.
+    // Press the unknown button and watch which value flips.
+    pageros_widgets_fill_rect(canvas, x, y + 4, canvas->w - x - 12, 1,
+                              g_palette.dim);
+    y += 8;
+    pageros_fonts_draw_text(canvas, x, y, "GPIO HUNT", -1,
+                            g_palette.accent, canvas->w);
+    y += line_h;
+    for (int i = 0; i < HUNT_PINS_MAX; i++) {
+        snprintf(buf, sizeof(buf), "  GPIO%-2d   %s",
+                 g_hunt_pins[i], g_hunt_now[i] ? "HIGH" : "LOW");
+        uint16_t col = g_hunt_now[i] ? g_palette.fg : g_palette.accent;
+        pageros_fonts_draw_text(canvas, x, y, buf, -1, col, canvas->w);
+        y += line_h;
+    }
 }
 
 static void render_idqr(pageros_fonts_canvas_t *canvas,
@@ -887,8 +1049,9 @@ static void render_idqr(pageros_fonts_canvas_t *canvas,
     cs->focused_label = NULL;
     pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
 
-    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "DEVICE IDENTITY", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -987,8 +1150,9 @@ static void render_nfc(pageros_fonts_canvas_t *canvas,
     cs->focused_label = NULL;
     pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
     pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
 
-    int x = 12, y = PAGEROS_CHROME_BAR_H + 8;
+    int x = PAGEROS_CHROME_RAIL_W + 12, y = PAGEROS_CHROME_BAR_H + 8;
     pageros_fonts_draw_text_16(canvas, x, y, "NFC SCANNER", -1,
                                g_palette.accent, canvas->w - 20);
     y += 24;
@@ -1073,6 +1237,7 @@ static void mount_desktop(void)
     ESP_LOGI("shell", "mount_desktop");
     s.page = SHELL_PAGE_DESKTOP;
     s.focus_mode = FOCUS_VIEWPORT;
+    s.rail_close_mode = false;
     s.text_input_widget = -1;
     s.text_buf = NULL; s.text_cap = 0;
     desktop_refresh_tiles();
@@ -1386,6 +1551,46 @@ static int focused_list_len(const pgr_cbor_value_t *frame, int widget_index)
 
 static void launch_app(const char *app_id);
 
+// Switch to a built-in app via the cache. Used both when launching from
+// the desktop tile grid AND when picking the entry from the rail; the
+// only difference is whether a cache slot already exists.
+static void switch_to_builtin(const char *id)
+{
+    if (!id || !*id) return;
+    cache_snapshot_current();
+    struct app_cache *slot = cache_find(id);
+    int target_page = -1;
+    if (slot && slot->is_builtin) target_page = slot->last_page;
+
+    // Map id to the default entry page; cache may have us deeper in.
+    if      (strcmp(id, "builtin:notes") == 0) {
+        if (target_page == SHELL_PAGE_NOTES_EDIT) {
+            // Resume the editor where the user left off. The buffer +
+            // filename already live in static `s`.
+            s.page = SHELL_PAGE_NOTES_EDIT;
+            s.focus_mode = FOCUS_VIEWPORT;
+            s.text_input_widget = 0;
+            s.text_buf = s.notes_edit_buf;
+            s.text_cap = sizeof(s.notes_edit_buf);
+        } else {
+            mount_notes_list();
+        }
+    }
+    else if (strcmp(id, "builtin:sysmon") == 0) mount_sysmon();
+    else if (strcmp(id, "builtin:idqr")   == 0) mount_idqr();
+    else if (strcmp(id, "builtin:nfc")    == 0) mount_nfc();
+    else if (strcmp(id, "builtin:notif")  == 0) mount_notif();
+    else if (strcmp(id, "builtin:quick")  == 0) mount_quick();
+    else { ESP_LOGW("shell", "switch_to_builtin: unknown %s", id); return; }
+
+    if (slot) s.vp_focus = slot->vp_focus;
+    s.rail_close_mode = false;
+    pageros_apprt_open_mark(id);   // also tracked in the open list
+    struct app_cache *touched = cache_alloc(id, true);
+    if (touched) touched->last_touched_us = esp_timer_get_time();
+    render_screen();
+}
+
 static bool handle_button_href(const char *href)
 {
     if (!href) return false;
@@ -1461,14 +1666,7 @@ static bool handle_button_href(const char *href)
         return true;
     }
     if (strncmp(href, "builtin:", 8) == 0) {
-        const char *id = href + 8;
-        if (strcmp(id, "notif") == 0)        { mount_notif(); return true; }
-        if (strcmp(id, "quick") == 0)        { mount_quick(); return true; }
-        if (strcmp(id, "notes") == 0)        { mount_notes_list(); return true; }
-        if (strcmp(id, "sysmon") == 0)       { mount_sysmon(); return true; }
-        if (strcmp(id, "idqr") == 0)         { mount_idqr(); return true; }
-        if (strcmp(id, "nfc") == 0)          { mount_nfc(); return true; }
-        ESP_LOGW("shell", "unknown builtin: %s", id);
+        switch_to_builtin(href);
         return true;
     }
     return false;
@@ -1478,6 +1676,27 @@ static void launch_app(const char *app_id)
 {
     if (!app_id || !*app_id) return;
     ESP_LOGI("shell", "launch_app: %s", app_id);
+
+    // Save whatever is currently foregrounded so we can return to it
+    // later from the rail without losing state.
+    cache_snapshot_current();
+
+    // Fast path — cached Frame bytes mean no HTTP round-trip.
+    struct app_cache *slot = cache_find(app_id);
+    if (slot && !slot->is_builtin && slot->frame_bytes && slot->frame_len) {
+        ESP_LOGI("shell", "launch_app cached: %s (%u bytes)", app_id,
+                 (unsigned)slot->frame_len);
+        pageros_apprt_open(app_id, slot->frame_bytes, slot->frame_len);
+        pageros_apprt_open_mark(app_id);
+        s.page = SHELL_PAGE_APP;
+        s.focus_mode = FOCUS_VIEWPORT;
+        s.vp_focus = slot->vp_focus;
+        s.text_input_widget = -1;
+        s.text_buf = NULL; s.text_cap = 0;
+        slot->last_touched_us = esp_timer_get_time();
+        render_screen();
+        return;
+    }
 
     esp_err_t sm = pageros_storage_init();
     if (sm != ESP_OK) {
@@ -1533,10 +1752,26 @@ static void launch_app(const char *app_id)
 
     pageros_apprt_open(app_id, buf, r.body_len);
     pageros_apprt_open_mark(app_id);
+
+    // Cache the freshly-fetched Frame so subsequent rail switches stay
+    // instant. We hold our own copy in the cache rather than peering
+    // into apprt's internal buffer.
+    struct app_cache *new_slot = cache_alloc(app_id, false);
+    if (new_slot) {
+        if (new_slot->frame_bytes) { free(new_slot->frame_bytes); new_slot->frame_bytes = NULL; }
+        new_slot->frame_bytes = (uint8_t *)malloc(r.body_len);
+        if (new_slot->frame_bytes) {
+            memcpy(new_slot->frame_bytes, buf, r.body_len);
+            new_slot->frame_len = r.body_len;
+        }
+        new_slot->is_builtin = false;
+        new_slot->vp_focus = (pageros_widgets_focus_t){0};
+    }
     free(buf);
 
     s.page = SHELL_PAGE_APP;
     s.focus_mode = FOCUS_VIEWPORT;
+    s.rail_close_mode = false;
     s.vp_focus.widget_index = 1;
     s.vp_focus.item_index = 0;
     s.text_input_widget = -1;
@@ -1792,7 +2027,13 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
              s.rail_index, s.tile_index);
 
     bool dirty = false;
-    bool rail_visible = (s.page == SHELL_PAGE_DESKTOP || s.page == SHELL_PAGE_APP);
+    bool rail_visible =
+        (s.page == SHELL_PAGE_DESKTOP ||
+         s.page == SHELL_PAGE_APP     ||
+         s.page == SHELL_PAGE_NOTES_LIST || s.page == SHELL_PAGE_NOTES_EDIT ||
+         s.page == SHELL_PAGE_SYSMON  || s.page == SHELL_PAGE_IDQR ||
+         s.page == SHELL_PAGE_NFC     || s.page == SHELL_PAGE_NOTIF ||
+         s.page == SHELL_PAGE_QUICK);
 
     switch (ev->kind) {
     case PAGEROS_ROUTER_EVT_ENCODER: {
@@ -1817,24 +2058,40 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
             if (rail_visible && s.focus_mode == FOCUS_RAIL) {
                 // Activate rail item.
                 if (s.rail_index == 0) {
-                    // HOME — switch to desktop (or stay on it if already there).
                     if (s.page != SHELL_PAGE_DESKTOP) mount_desktop();
                     else {
                         s.focus_mode = FOCUS_VIEWPORT;
                         dirty = true;
                     }
-                } else {
-                    // Launch the focused open app.
-                    int idx = s.rail_index - 1;
-                    if (idx >= 0 && idx < s.rail_count && s.rail_items[idx]) {
-                        char app_id[96];
-                        strncpy(app_id, s.rail_items[idx], sizeof(app_id) - 1);
-                        app_id[sizeof(app_id) - 1] = '\0';
-                        launch_app(app_id);
-                        return true;
-                    }
+                    break;
                 }
-                break;
+                int idx = s.rail_index - 1;
+                if (idx < 0 || idx >= s.rail_count || !s.rail_items[idx]) break;
+
+                char app_id[96];
+                strncpy(app_id, s.rail_items[idx], sizeof(app_id) - 1);
+                app_id[sizeof(app_id) - 1] = '\0';
+
+                if (s.rail_close_mode) {
+                    // Close mode — drop the app from open-list + cache.
+                    pageros_apprt_open_close(app_id);
+                    struct app_cache *slot = cache_find(app_id);
+                    if (slot) cache_free_slot(slot);
+                    // Snap focus back into rail HOME so we don't index
+                    // off the end of a shrinking list.
+                    s.rail_index = 0;
+                    s.rail_close_mode = false;
+                    pageros_toast("APP CLOSED", PAGEROS_TOAST_INFO, 1200);
+                    render_screen();
+                    return true;
+                }
+
+                if (strncmp(app_id, "builtin:", 8) == 0) {
+                    switch_to_builtin(app_id);
+                } else {
+                    launch_app(app_id);
+                }
+                return true;
             }
             // Viewport activation.
             if (s.page == SHELL_PAGE_DESKTOP) {
@@ -1963,6 +2220,20 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
     case PAGEROS_ROUTER_EVT_KEY: {
         if (!ev->as.key.pressed) return true;
         char ch = kb_decode(ev->as.key.row, ev->as.key.col);
+        // SPACE on the rail toggles close-mode regardless of text-input
+        // state. This is a global rail gesture, so it shadows the
+        // normal "append to focused text buffer" path.
+        if (rail_visible && s.focus_mode == FOCUS_RAIL && ch == ' ') {
+            s.rail_close_mode = !s.rail_close_mode;
+            pageros_audio_play_ui_click();
+            pageros_toast(s.rail_close_mode ? "CLOSE MODE — ENTER TO CLOSE"
+                                            : "SELECT MODE",
+                          s.rail_close_mode ? PAGEROS_TOAST_WARN
+                                            : PAGEROS_TOAST_INFO,
+                          1500);
+            render_screen();
+            return true;
+        }
         if (!s.text_buf) break;
         if (ch == '\b') {
             size_t L = strlen(s.text_buf);
@@ -2006,6 +2277,55 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
         render_screen();
     }
     return true;
+}
+
+// --- GPIO button hunter ------------------------------------------- //
+//
+// We don't know which GPIO (if any) is wired to the third physical
+// button at the bottom of the device. This background task polls a
+// short list of GPIOs that the pin file leaves unmapped, logs any
+// level transitions, and stores the latest levels so SYSMON can show
+// them. Press the right button while running `idf.py monitor` and we
+// should see "hunt: GPIOxx → LOW" pop up.
+
+const int g_hunt_pins[HUNT_PINS_MAX] = { 9, 15, 16, 26 };
+static int g_hunt_last[HUNT_PINS_MAX] = { 1, 1, 1, 1 };
+int g_hunt_now[HUNT_PINS_MAX]  = { 1, 1, 1, 1 };
+
+static void button_hunt_task(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < HUNT_PINS_MAX; i++) {
+        gpio_config_t cfg = {
+            .pin_bit_mask = 1ULL << g_hunt_pins[i],
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        // Soft-ignore failures — a pin in use by another driver will
+        // refuse this reconfig and just stay at its existing level.
+        (void)gpio_config(&cfg);
+        g_hunt_last[i] = gpio_get_level((gpio_num_t)g_hunt_pins[i]);
+        g_hunt_now[i]  = g_hunt_last[i];
+    }
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(80));
+        for (int i = 0; i < HUNT_PINS_MAX; i++) {
+            int lvl = gpio_get_level((gpio_num_t)g_hunt_pins[i]);
+            g_hunt_now[i] = lvl;
+            if (lvl != g_hunt_last[i]) {
+                ESP_LOGI("hunt", "GPIO%d -> %s",
+                         g_hunt_pins[i], lvl ? "HIGH" : "LOW");
+                g_hunt_last[i] = lvl;
+                // Push a notif so the user sees something on-device too.
+                char msg[40];
+                snprintf(msg, sizeof(msg), "GPIO%d %s",
+                         g_hunt_pins[i], lvl ? "HIGH" : "LOW");
+                notif_push(msg, PAGEROS_TOAST_INFO);
+            }
+        }
+    }
 }
 
 // --- GPS callback ----------------------------------------------- //
@@ -2382,6 +2702,10 @@ void app_main(void)
     }
 
     pageros_power_init(NULL);
+
+    // Background GPIO transition logger — kept running so we can hunt
+    // the elusive third bottom button. Cheap (~50 µs every 80 ms).
+    xTaskCreate(button_hunt_task, "gpio_hunt", 3072, NULL, 3, NULL);
 
     if (input_err == ESP_OK || kbd_err == ESP_OK) {
         esp_err_t r = pageros_router_init();

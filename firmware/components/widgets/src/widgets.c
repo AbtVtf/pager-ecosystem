@@ -787,39 +787,48 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
     int start_y = rail_y + (rail_h - total_h) / 2;
     if (start_y < rail_y + 4) start_y = rail_y + 4;
 
+    // In close-mode the whole rail tints red so the user can't miss it.
+    uint16_t close_color = pal->error;
+
     for (int i = 0; i < n; i++) {
         int row_y = start_y + i * row_h;
         bool focused = (rail->focus_index == i);
-        uint16_t border = focused
-                              ? (rail->rail_active ? pal->accent : pal->info)
-                              : pal->dim;
+        bool home_row = (i == 0);
+
+        uint16_t border;
+        if (focused) {
+            if (rail->close_mode && !home_row) border = close_color;
+            else border = rail->rail_active ? pal->accent : pal->info;
+        } else {
+            border = pal->dim;
+        }
 
         if (focused) {
-            // Filled background tint.
-            uint16_t tint = rail->rail_active ? pal->accent : pal->info;
-            // Composite alpha-ish via a darker variant — we don't have
-            // blend so just outline + small fill chunk.
+            uint16_t tint = border;
             pageros_widgets_outline_rect(canvas, rail_x + 4, row_y,
                                          rail_w - 10, row_h - 4, border);
-            // Left-edge accent strip.
             pageros_widgets_fill_rect(canvas, rail_x + 2, row_y, 2, row_h - 4, tint);
         }
 
-        const char *label = (i == 0) ? "HOME" : rail->items[i - 1];
+        const char *label = home_row ? "HOME" : rail->items[i - 1];
         if (!label) label = "?";
-        // Truncate name to fit ~4 chars at 16x16.
+        // Strip our "builtin:" prefix so the rail shows app names, not paths.
+        if (strncmp(label, "builtin:", 8) == 0) label += 8;
         char short_label[6];
         size_t L = strlen(label);
         size_t copy = L > 5 ? 5 : L;
         memcpy(short_label, label, copy);
         short_label[copy] = '\0';
-        // Upper-case for cyberpunk feel — many labels are mixed case.
         for (size_t k = 0; k < copy; k++) {
             if (short_label[k] >= 'a' && short_label[k] <= 'z') {
                 short_label[k] = (char)(short_label[k] - 32);
             }
         }
-        uint16_t label_color = focused ? pal->fg : pal->info;
+
+        uint16_t label_color;
+        if (rail->close_mode && !home_row) label_color = close_color;
+        else label_color = focused ? pal->fg : pal->info;
+
         int label_w = pageros_fonts_measure_text_16(short_label, -1);
         int label_x = rail_x + (rail_w - 4 - label_w) / 2;
         if (label_x < rail_x + 6) label_x = rail_x + 6;
@@ -827,6 +836,17 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
         pageros_fonts_draw_text_16(canvas, label_x, label_y,
                                    short_label, -1, label_color,
                                    rail_w - 10);
+    }
+
+    // Close-mode badge at the bottom of the rail so the state is visible
+    // even when no row is focused.
+    if (rail->close_mode) {
+        const char *tag = "[X]";
+        int tw = pageros_fonts_measure_text(tag, -1);
+        int tx = rail_x + (rail_w - tw) / 2;
+        pageros_fonts_draw_text(canvas, tx,
+                                rail_y + rail_h - 12, tag, -1,
+                                close_color, rail_w);
     }
 }
 
