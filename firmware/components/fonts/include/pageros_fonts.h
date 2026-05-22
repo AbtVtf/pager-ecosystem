@@ -118,6 +118,24 @@ int pageros_fonts_draw_text_16(const pageros_fonts_canvas_t *canvas,
                                uint16_t fg_rgb565,
                                int max_width_px);
 
+// Render a single ASCII codepoint from the 16×16 set scaled up by
+// `scale` (1 = native, 2 = 32×32 chunky, 3 = 48×48). Used by the
+// tile launcher and boot splash for chunky icon glyphs. Falls back to
+// an outlined box for codepoints not in the designed set.
+void pageros_fonts_draw_glyph_scaled_16(const pageros_fonts_canvas_t *canvas,
+                                        int x, int y,
+                                        uint32_t codepoint,
+                                        uint16_t fg_rgb565,
+                                        int scale);
+
+// Render a NUL-terminated ASCII string at `scale` × 16. Returns the
+// final x cursor. Letters are advanced by 16*scale px each.
+int pageros_fonts_draw_text_scaled_16(const pageros_fonts_canvas_t *canvas,
+                                      int x, int y,
+                                      const char *text, int text_len,
+                                      uint16_t fg_rgb565,
+                                      int scale);
+
 // Decode the next UTF-8 codepoint at `*p`. On success `*p` advances
 // past the consumed bytes and the codepoint is returned. On a malformed
 // or truncated sequence the function returns 0xFFFD (replacement char)

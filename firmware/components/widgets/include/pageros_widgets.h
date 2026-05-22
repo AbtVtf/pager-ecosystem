@@ -136,6 +136,12 @@ typedef struct {
     int  lora_state;               // 0=off, 1=ready
     int  gps_state;                // 0=no fix, 1=fix
     const char *power_mode;        // "ACT" / "DIM" / "OFF" / "SLP"
+
+    // When non-NULL, the bottom-bar's rightmost slot shows this label
+    // (typically the currently-focused tile/app name) instead of the
+    // power mode. The desktop sets it while the viewport has focus so
+    // the user always knows which icon they're hovering.
+    const char *focused_label;
 } pageros_chrome_state_t;
 
 // 16 px-tall top bar across the full canvas. Renders:
@@ -189,6 +195,38 @@ void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
 void pageros_widgets_chrome_scanlines(const pageros_fonts_canvas_t *canvas,
                                       int x, int y, int w, int h,
                                       int every_n_rows);
+
+// --- Toast / OSD overlay ---------------------------------------- //
+//
+// One-slot transient banner for system events (Wi-Fi connected, install
+// done, errors). pageros_toast() stores the text + an expiry timestamp;
+// any subsequent chrome_toast() render inside the expiry window draws
+// the banner over whatever else is on screen.
+
+typedef enum {
+    PAGEROS_TOAST_INFO  = 0,
+    PAGEROS_TOAST_OK    = 1,
+    PAGEROS_TOAST_WARN  = 2,
+    PAGEROS_TOAST_ERROR = 3,
+} pageros_toast_level_t;
+
+// Queue a toast. `duration_ms` is how long it stays visible. The shell
+// must re-render at least once after the toast is queued for the user
+// to see it; main.c does this via render_screen() at every input event.
+void pageros_toast(const char *text, pageros_toast_level_t level, int duration_ms);
+
+// Render the active toast, if any. No-op when expired or never queued.
+// Called by the shell after the main content + scanlines, so the toast
+// floats on top.
+void pageros_widgets_chrome_toast(const pageros_fonts_canvas_t *canvas,
+                                  const pageros_widgets_palette_t *pal);
+
+// True if a toast is currently visible — the shell can use this to
+// decide whether to schedule another render to clear it after expiry.
+bool pageros_toast_active(void);
+
+// Remaining time in milliseconds, or 0 if no toast is visible.
+int pageros_toast_remaining_ms(void);
 
 #ifdef __cplusplus
 }

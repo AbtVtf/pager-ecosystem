@@ -12,6 +12,7 @@
 // framebuffer rather than going through the Frame renderer, because
 // the tile layout is shell-policy rather than app-content.
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
@@ -258,9 +259,19 @@ static void draw_rail(pageros_fonts_canvas_t *canvas)
 }
 
 static void render_desktop(pageros_fonts_canvas_t *canvas,
-                           const pageros_chrome_state_t *cs)
+                           pageros_chrome_state_t *cs)
 {
     pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+
+    // When the viewport is focused on the desktop, show the focused
+    // tile's name in the bottom-bar's right slot instead of PWR mode —
+    // gives the user a live "you are hovering X" indicator while they
+    // scroll through icon-only tiles.
+    if (s.focus_mode == FOCUS_VIEWPORT &&
+        s.tile_index >= 0 && s.tile_index < s.tile_count) {
+        cs->focused_label = s.tiles[s.tile_index].name;
+    }
+
     draw_chrome_bars(canvas, cs);
     draw_rail(canvas);
 
@@ -281,7 +292,7 @@ static void render_desktop(pageros_fonts_canvas_t *canvas,
 }
 
 static void render_modal_frame(pageros_fonts_canvas_t *canvas,
-                               const pageros_chrome_state_t *cs)
+                               pageros_chrome_state_t *cs)
 {
     // Settings / Wi-Fi / Add-app — full-width, no rail, with chrome bars.
     pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
@@ -316,7 +327,7 @@ static void render_modal_frame(pageros_fonts_canvas_t *canvas,
 }
 
 static void render_app(pageros_fonts_canvas_t *canvas,
-                       const pageros_chrome_state_t *cs)
+                       pageros_chrome_state_t *cs)
 {
     // External app — render with chrome bars + rail visible.
     pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
@@ -377,6 +388,8 @@ static void render_screen(void)
     case SHELL_PAGE_WIFI:
     case SHELL_PAGE_ADD_APP:   render_modal_frame(&canvas, &cs); break;
     }
+    // Toast banner floats above everything (after content + scanlines).
+    pageros_widgets_chrome_toast(&canvas, &g_palette);
     pageros_display_present();
 }
 
@@ -613,6 +626,7 @@ static bool handle_button_href(const char *href)
     if (strcmp(href, "shell:wifi-connect") == 0) {
         if (s.ssid[0] == '\0') {
             strncpy(s.wifi_status, "SSID is empty", sizeof(s.wifi_status));
+            pageros_toast("SSID IS EMPTY", PAGEROS_TOAST_WARN, 2500);
         } else {
             strncpy(s.wifi_status, "Connecting…", sizeof(s.wifi_status));
             s.wifi_status[sizeof(s.wifi_status) - 1] = '\0';
@@ -620,9 +634,11 @@ static bool handle_button_href(const char *href)
             if (r == ESP_OK) {
                 strncpy(s.wifi_status, "Connected", sizeof(s.wifi_status));
                 pageros_wifi_creds_save(s.ssid, s.psk);
+                pageros_toast("WI-FI CONNECTED", PAGEROS_TOAST_OK, 2500);
             } else {
                 snprintf(s.wifi_status, sizeof(s.wifi_status), "Failed: %s",
                          esp_err_to_name(r));
+                pageros_toast("WI-FI FAILED", PAGEROS_TOAST_ERROR, 3000);
             }
         }
         s.wifi_status[sizeof(s.wifi_status) - 1] = '\0';
@@ -651,11 +667,13 @@ static bool handle_button_href(const char *href)
                     snprintf(s.addapp_msg, sizeof(s.addapp_msg),
                              "Installed %.48s", app_id);
                     strncpy(s.addapp_msg_level, "info", sizeof(s.addapp_msg_level));
+                    pageros_toast("APP INSTALLED", PAGEROS_TOAST_OK, 2500);
                 } else {
                     snprintf(s.addapp_msg, sizeof(s.addapp_msg),
                              "Install failed: %s", esp_err_to_name(r));
                     strncpy(s.addapp_msg_level, "error",
                             sizeof(s.addapp_msg_level));
+                    pageros_toast("INSTALL FAILED", PAGEROS_TOAST_ERROR, 3000);
                 }
             }
         }
@@ -974,6 +992,103 @@ static void on_gps_fix(const pageros_gps_fix_t *fix, void *user_ctx)
              (double)fix->accuracy_m, (unsigned)fix->satellites);
 }
 
+// --- Boot splash ------------------------------------------------- //
+//
+// Terminal-style log roll shown during the second half of boot (after
+// the display is up). Each subsystem appends a line as it comes online,
+// then mount_desktop() takes over once everything is ready.
+
+#define BOOT_LOG_MAX 14
+
+typedef enum {
+    BL_INFO = 0,
+    BL_OK,
+    BL_WARN,
+    BL_ERROR,
+} boot_log_level_t;
+
+static struct {
+    char  text[BOOT_LOG_MAX][56];
+    uint8_t level[BOOT_LOG_MAX];
+    int   n;
+} g_boot_log;
+
+static void boot_log_add(boot_log_level_t lvl, const char *fmt, ...)
+{
+    char line[56];
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (g_boot_log.n >= BOOT_LOG_MAX) {
+        // Scroll: drop oldest.
+        for (int i = 1; i < BOOT_LOG_MAX; i++) {
+            memcpy(g_boot_log.text[i - 1], g_boot_log.text[i], sizeof(g_boot_log.text[0]));
+            g_boot_log.level[i - 1] = g_boot_log.level[i];
+        }
+        g_boot_log.n = BOOT_LOG_MAX - 1;
+    }
+    strncpy(g_boot_log.text[g_boot_log.n], line, sizeof(g_boot_log.text[0]) - 1);
+    g_boot_log.text[g_boot_log.n][sizeof(g_boot_log.text[0]) - 1] = '\0';
+    g_boot_log.level[g_boot_log.n] = (uint8_t)lvl;
+    g_boot_log.n++;
+}
+
+static void boot_splash_render(void)
+{
+    uint16_t *fb = (uint16_t *)pageros_display_framebuffer();
+    if (!fb) return;
+    pageros_fonts_canvas_t canvas = {
+        .pixels = fb,
+        .w = PAGEROS_DISPLAY_WIDTH,
+        .h = PAGEROS_DISPLAY_HEIGHT,
+    };
+    pageros_widgets_fill_rect(&canvas, 0, 0, canvas.w, canvas.h, g_palette.bg);
+
+    // Header — "PAGEROS" at 2x scale (32 px chunky) centered.
+    const char *hdr = "PAGEROS";
+    int hdr_w = 16 * 2 * (int)strlen(hdr);
+    int hdr_x = (canvas.w - hdr_w) / 2;
+    pageros_fonts_draw_text_scaled_16(&canvas, hdr_x, 14, hdr, -1,
+                                      g_palette.info, 2);
+    // Magenta accent dot to the right of the header.
+    pageros_widgets_fill_rect(&canvas, hdr_x + hdr_w + 4, 24, 6, 6,
+                              g_palette.accent);
+
+    // Identity below the header (small, dim).
+    char fp[PAGEROS_IDENTITY_FP_LEN] = {0};
+    if (pageros_identity_fingerprint(fp) == ESP_OK && fp[0]) {
+        char buf[20];
+        snprintf(buf, sizeof(buf), "ID: %s", fp);
+        int bw = pageros_fonts_measure_text(buf, -1);
+        pageros_fonts_draw_text(&canvas, (canvas.w - bw) / 2, 52,
+                                buf, -1, g_palette.dim, canvas.w);
+    }
+
+    // Divider line.
+    pageros_widgets_fill_rect(&canvas, 24, 66, canvas.w - 48, 1, g_palette.info);
+
+    // Log lines (small font, 11 px line height).
+    int y = 74;
+    int line_h = 11;
+    for (int i = 0; i < g_boot_log.n; i++) {
+        uint16_t col = g_palette.fg;
+        switch (g_boot_log.level[i]) {
+        case BL_OK:    col = g_palette.info;   break;
+        case BL_WARN:  col = g_palette.warn;   break;
+        case BL_ERROR: col = g_palette.error;  break;
+        case BL_INFO:
+        default:       col = g_palette.fg;     break;
+        }
+        pageros_fonts_draw_text(&canvas, 24, y,
+                                g_boot_log.text[i], -1, col,
+                                canvas.w - 48);
+        y += line_h;
+        if (y > canvas.h - 12) break;
+    }
+
+    pageros_display_present();
+}
+
 // --- Boot --------------------------------------------------------- //
 
 void app_main(void)
@@ -1045,16 +1160,39 @@ void app_main(void)
         ESP_LOGW(TAG, "display init failed: %s", esp_err_to_name(disp_err));
     }
 
+    // Palette is initialised early so the boot splash + every other
+    // render uses it; the cyberpunk look is the device's identity.
+    pageros_widgets_cyberpunk_palette(&g_palette);
+
+    // Splash begins as soon as the display is alive. We backfill log
+    // lines for the silent pre-display init steps (NVS, identity,
+    // I2C/XL9555) so the user sees a complete boot story.
+    if (disp_err == ESP_OK) {
+        boot_log_add(BL_OK, "[OK] BOOT SELFTEST");
+        boot_log_add(BL_OK, "[OK] NVS");
+        boot_log_add(id_err == ESP_OK ? BL_OK : BL_WARN,
+                     id_err == ESP_OK ? "[OK] IDENTITY" : "[!!] IDENTITY: %s",
+                     esp_err_to_name(id_err));
+        boot_log_add(BL_OK, "[OK] I2C BUS + XL9555 ENABLES");
+        boot_log_add(BL_OK, "[OK] DISPLAY ONLINE");
+        boot_splash_render();
+    }
+
     // SD mount remains lazy — first sideload/launch will mount it.
     ESP_LOGW(TAG, "[diag] SD init skipped — shell + display work without it");
+    boot_log_add(BL_INFO, "[..] SD MOUNT DEFERRED");
+    boot_splash_render();
 
     esp_err_t log_err = pageros_logger_init();
     if (log_err != ESP_OK) {
         ESP_LOGW(TAG, "logger init failed: %s", esp_err_to_name(log_err));
+        boot_log_add(BL_WARN, "[!!] LOGGER: %s", esp_err_to_name(log_err));
     } else {
         LOG_INFO(TAG, "logger online, sd=%s",
                  pageros_logger_is_writing_to_sd() ? "yes" : "no");
+        boot_log_add(BL_OK, "[OK] LOGGER");
     }
+    boot_splash_render();
 
     pageros_lora_config_t lora_cfg = {
         .band             = PAGEROS_LORA_BAND_868_MHZ,
@@ -1070,23 +1208,39 @@ void app_main(void)
     esp_err_t lora_err = pageros_lora_init(&lora_cfg);
     if (lora_err == ESP_OK) {
         LOG_INFO(TAG, "LoRa ready (SX1262, 868 MHz, SF7/BW125)");
+        boot_log_add(BL_OK, "[OK] LORA SX1262 SF7/BW125 868MHZ");
     } else {
         LOG_ERROR(TAG, "LoRa init failed: %s", esp_err_to_name(lora_err));
+        boot_log_add(BL_WARN, "[!!] LORA: %s", esp_err_to_name(lora_err));
     }
+    boot_splash_render();
 
     esp_err_t wifi_err = pageros_wifi_init();
     if (wifi_err != ESP_OK) {
         ESP_LOGW(TAG, "wifi init failed: %s", esp_err_to_name(wifi_err));
+        boot_log_add(BL_WARN, "[!!] WI-FI: %s", esp_err_to_name(wifi_err));
+        boot_splash_render();
     } else {
+        boot_log_add(BL_OK, "[OK] WI-FI STA INIT");
+        boot_splash_render();
         char saved_ssid[33] = {0}, saved_psk[65] = {0};
         if (pageros_wifi_creds_load(saved_ssid, sizeof(saved_ssid),
                                     saved_psk, sizeof(saved_psk)) == ESP_OK
                 && saved_ssid[0]) {
             ESP_LOGI(TAG, "Wi-Fi auto-connect to '%s'", saved_ssid);
+            boot_log_add(BL_INFO, "[..] WI-FI CONNECTING %s", saved_ssid);
+            boot_splash_render();
             esp_err_t wc = pageros_wifi_connect(saved_ssid, saved_psk, 15000);
             if (wc != ESP_OK) {
                 ESP_LOGW(TAG, "auto-connect failed: %s", esp_err_to_name(wc));
+                boot_log_add(BL_WARN, "[!!] WI-FI: %s", esp_err_to_name(wc));
+            } else {
+                boot_log_add(BL_OK, "[OK] WI-FI CONNECTED");
             }
+            boot_splash_render();
+        } else {
+            boot_log_add(BL_INFO, "[..] WI-FI NO CREDS");
+            boot_splash_render();
         }
     }
 
@@ -1095,16 +1249,28 @@ void app_main(void)
     if (audio_err != ESP_OK) {
         ESP_LOGW(TAG, "audio init failed: %s — UI sounds disabled",
                  esp_err_to_name(audio_err));
+        boot_log_add(BL_WARN, "[!!] AUDIO: %s", esp_err_to_name(audio_err));
+    } else {
+        boot_log_add(BL_OK, "[OK] AUDIO ES8311 + UI SOUNDS");
     }
+    boot_splash_render();
 
     pageros_fonts_init(NULL);
     pageros_apprt_init(NULL);
     pageros_shell_init();
-    pageros_widgets_cyberpunk_palette(&g_palette);
+    boot_log_add(BL_OK, "[OK] FONTS + APPRT + SHELL");
+    boot_splash_render();
 
     if (disp_err == ESP_OK) {
         (void)pageros_display_panel_reinit();
+        boot_log_add(BL_OK, "[OK] DESKTOP MOUNTING");
+        boot_splash_render();
+        // Brief hold so the last log line reads before the desktop
+        // takes over — feels deliberate.
+        vTaskDelay(pdMS_TO_TICKS(600));
         mount_desktop();
+        pageros_toast("WELCOME TO PAGEROS", PAGEROS_TOAST_INFO, 2200);
+        render_screen();
     }
 
     esp_err_t gps_err = pageros_gps_init();

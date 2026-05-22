@@ -270,3 +270,61 @@ int pageros_fonts_draw_text_16(const pageros_fonts_canvas_t *canvas,
     }
     return cur_x;
 }
+
+void pageros_fonts_draw_glyph_scaled_16(const pageros_fonts_canvas_t *canvas,
+                                        int x, int y,
+                                        uint32_t cp,
+                                        uint16_t fg, int scale)
+{
+    if (!canvas || !canvas->pixels) return;
+    if (scale < 1) scale = 1;
+    if (cp >= 128 || !font16_has_ascii(cp)) {
+        // Outlined box for unknown codepoints — matches the missing-
+        // glyph convention so callers see *something* clear.
+        int s = 16 * scale;
+        for (int i = 0; i < s; i++) {
+            put_pixel(canvas, x + i,     y,         fg);
+            put_pixel(canvas, x + i,     y + s - 1, fg);
+            put_pixel(canvas, x,         y + i,     fg);
+            put_pixel(canvas, x + s - 1, y + i,     fg);
+        }
+        return;
+    }
+    const uint16_t *rows = pageros_font16_ascii[cp];
+    for (int row = 0; row < 16; row++) {
+        uint16_t bits = rows[row];
+        if (!bits) continue;
+        for (int col = 0; col < 16; col++) {
+            if (bits & (1u << (15 - col))) {
+                for (int dy = 0; dy < scale; dy++) {
+                    for (int dx = 0; dx < scale; dx++) {
+                        put_pixel(canvas, x + col * scale + dx,
+                                  y + row * scale + dy, fg);
+                    }
+                }
+            }
+        }
+    }
+}
+
+int pageros_fonts_draw_text_scaled_16(const pageros_fonts_canvas_t *canvas,
+                                      int x, int y,
+                                      const char *text, int text_len,
+                                      uint16_t fg,
+                                      int scale)
+{
+    if (!canvas || !text) return x;
+    if (scale < 1) scale = 1;
+    const char *end = (text_len >= 0) ? (text + text_len) : NULL;
+    const char *p = text;
+    int cur_x = x;
+    while (true) {
+        if (end && p >= end) break;
+        if (!end && *p == '\0') break;
+        uint32_t cp = pageros_fonts_utf8_next(&p, end);
+        if (cp == 0) break;
+        pageros_fonts_draw_glyph_scaled_16(canvas, cur_x, y, cp, fg, scale);
+        cur_x += 16 * scale;
+    }
+    return cur_x;
+}

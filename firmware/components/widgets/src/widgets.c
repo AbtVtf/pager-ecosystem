@@ -743,8 +743,21 @@ void pageros_widgets_chrome_botbar(const pageros_fonts_canvas_t *canvas,
     chrome_draw_indicator(canvas, x, y, "GPS", gps >= 1, pal->info, pal->dim, pal->info);
     x += 42;
 
-    // PWR:MODE on the right edge.
-    if (state && state->power_mode) {
+    // Rightmost slot — focused label (e.g. focused tile name) if set,
+    // otherwise the power mode. The label gets the accent color so the
+    // user's eye is drawn to it while they're scrolling tiles.
+    if (state && state->focused_label && state->focused_label[0]) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "[%s]", state->focused_label);
+        // Upper-case for consistency with the icon-letter scheme.
+        for (char *p = buf; *p; p++) {
+            if (*p >= 'a' && *p <= 'z') *p = (char)(*p - 32);
+        }
+        int bw = pageros_fonts_measure_text(buf, -1);
+        if (bw > 180) bw = 180;
+        pageros_fonts_draw_text(canvas, w - bw - 4, y + 4, buf, -1,
+                                pal->accent, 200);
+    } else if (state && state->power_mode) {
         char pm[16];
         snprintf(pm, sizeof(pm), "PWR:%s", state->power_mode);
         int pmw = pageros_fonts_measure_text(pm, -1);
@@ -835,16 +848,21 @@ void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
         return;
     }
 
-    // 3 columns × 2 rows = 6 tiles. Adjust if fewer.
-    int cols = 3;
-    int rows = (n_tiles + cols - 1) / cols;
-    if (rows > 2) rows = 2;
-    int total = cols * rows;
-    if (total > n_tiles) total = n_tiles;
+    // 4×3 launcher grid — each tile shows a 32×32 first-letter glyph
+    // and nothing else. The tile name appears in the bottom-bar's
+    // rightmost slot when the user focuses it (see chrome_botbar).
+    int cols = 4;
+    int rows = 3;
+    int per_page = cols * rows;
+    int total = n_tiles < per_page ? n_tiles : per_page;
+    // TODO: paging when n_tiles > per_page. For v1 the grid clamps.
 
-    int pad = 8;
+    int pad = 6;
     int tile_w = (w - pad * (cols + 1)) / cols;
     int tile_h = (h - pad * (rows + 1)) / rows;
+
+    int icon_scale = 2;
+    int icon_size  = 16 * icon_scale;     // 32 px square
 
     for (int i = 0; i < total; i++) {
         int r = i / cols;
@@ -852,43 +870,120 @@ void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
         int tx = x + pad + c * (tile_w + pad);
         int ty = y + pad + r * (tile_h + pad);
         bool focused = (i == focus_index);
+
+        // Frame: corner brackets (cyberpunk targeting reticle) when
+        // unfocused; full rect + inner glow when focused.
         uint16_t border = focused ? pal->accent : pal->info;
-        // Tile outline
-        pageros_widgets_outline_rect(canvas, tx, ty, tile_w, tile_h, border);
         if (focused) {
-            // Inner highlight ring.
+            pageros_widgets_outline_rect(canvas, tx, ty, tile_w, tile_h, border);
             pageros_widgets_outline_rect(canvas, tx + 2, ty + 2,
                                          tile_w - 4, tile_h - 4, border);
+        } else {
+            int b = 5;   // bracket length
+            // top-left
+            pageros_widgets_fill_rect(canvas, tx, ty, b, 1, border);
+            pageros_widgets_fill_rect(canvas, tx, ty, 1, b, border);
+            // top-right
+            pageros_widgets_fill_rect(canvas, tx + tile_w - b, ty, b, 1, border);
+            pageros_widgets_fill_rect(canvas, tx + tile_w - 1, ty, 1, b, border);
+            // bot-left
+            pageros_widgets_fill_rect(canvas, tx, ty + tile_h - 1, b, 1, border);
+            pageros_widgets_fill_rect(canvas, tx, ty + tile_h - b, 1, b, border);
+            // bot-right
+            pageros_widgets_fill_rect(canvas, tx + tile_w - b, ty + tile_h - 1,
+                                      b, 1, border);
+            pageros_widgets_fill_rect(canvas, tx + tile_w - 1, ty + tile_h - b,
+                                      1, b, border);
         }
-        // Tile name centered, 16x16 font.
+
+        // Icon glyph — first letter of the tile name, upper-cased,
+        // rendered at 2× the 16×16 font (= 32×32 chunky cyberpunk).
         const char *name = tiles[i].name ? tiles[i].name : "?";
-        // Upper-case the name for the chunky look.
-        char buf[16];
-        size_t nl = strlen(name);
-        if (nl > sizeof(buf) - 1) nl = sizeof(buf) - 1;
-        for (size_t k = 0; k < nl; k++) {
-            char ch = name[k];
-            if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
-            buf[k] = ch;
-        }
-        buf[nl] = '\0';
-        int nw = pageros_fonts_measure_text_16(buf, -1);
-        int nx = tx + (tile_w - nw) / 2;
-        int ny = ty + (tile_h - 16) / 2;
-        pageros_fonts_draw_text_16(canvas, nx, ny, buf, -1,
-                                   focused ? pal->fg : pal->info,
-                                   tile_w - 8);
-        // Unread badge in the top-right corner if non-zero.
+        char ch = name[0];
+        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+        if (ch == '\0') ch = '?';
+        int ix = tx + (tile_w - icon_size) / 2;
+        int iy = ty + (tile_h - icon_size) / 2;
+        uint16_t fg = focused ? pal->fg : pal->info;
+        pageros_fonts_draw_glyph_scaled_16(canvas, ix, iy, (uint32_t)ch,
+                                           fg, icon_scale);
+
+        // Unread badge: a small magenta dot in the top-right corner.
         if (tiles[i].unread > 0) {
-            char badge[8];
-            int n = tiles[i].unread;
-            if (n > 99) n = 99;
-            snprintf(badge, sizeof(badge), "[%d]", n);
-            int bw = pageros_fonts_measure_text(badge, -1);
-            pageros_fonts_draw_text(canvas, tx + tile_w - bw - 4, ty + 4,
-                                    badge, -1, pal->accent, tile_w);
+            int d = 5;
+            pageros_widgets_fill_rect(canvas, tx + tile_w - d - 3, ty + 3,
+                                      d, d, pal->accent);
         }
     }
+}
+
+// ---- Toast / OSD overlay -------------------------------------- //
+
+#include "esp_timer.h"
+
+static struct {
+    char    text[80];
+    pageros_toast_level_t level;
+    int64_t expires_us;
+} g_toast;
+
+void pageros_toast(const char *text, pageros_toast_level_t level, int duration_ms)
+{
+    if (!text) return;
+    strncpy(g_toast.text, text, sizeof(g_toast.text) - 1);
+    g_toast.text[sizeof(g_toast.text) - 1] = '\0';
+    g_toast.level = level;
+    if (duration_ms < 0) duration_ms = 0;
+    g_toast.expires_us = esp_timer_get_time() + (int64_t)duration_ms * 1000;
+}
+
+bool pageros_toast_active(void)
+{
+    return esp_timer_get_time() < g_toast.expires_us && g_toast.text[0];
+}
+
+int pageros_toast_remaining_ms(void)
+{
+    int64_t left_us = g_toast.expires_us - esp_timer_get_time();
+    if (left_us <= 0) return 0;
+    return (int)(left_us / 1000);
+}
+
+void pageros_widgets_chrome_toast(const pageros_fonts_canvas_t *canvas,
+                                  const pageros_widgets_palette_t *pal)
+{
+    if (!canvas || !pal) return;
+    if (!pageros_toast_active()) return;
+
+    uint16_t accent = pal->info;
+    switch (g_toast.level) {
+    case PAGEROS_TOAST_OK:    accent = pal->info;   break;
+    case PAGEROS_TOAST_WARN:  accent = pal->warn;   break;
+    case PAGEROS_TOAST_ERROR: accent = pal->error;  break;
+    case PAGEROS_TOAST_INFO:
+    default:                  accent = pal->accent; break;
+    }
+
+    int h  = 24;
+    int y  = canvas->h - PAGEROS_CHROME_BAR_H - h - 4;
+    int w  = canvas->w;
+    int margin = 8;
+
+    // Filled black background so the banner punches through whatever
+    // is underneath it.
+    pageros_widgets_fill_rect(canvas, margin, y, w - margin * 2, h, pal->bg);
+    // Double-thick accent border so it reads as a banner, not a button.
+    pageros_widgets_outline_rect(canvas, margin, y, w - margin * 2, h, accent);
+    pageros_widgets_outline_rect(canvas, margin + 1, y + 1,
+                                 w - margin * 2 - 2, h - 2, accent);
+
+    int len = (int)strlen(g_toast.text);
+    int tw  = pageros_fonts_measure_text(g_toast.text, len);
+    int tx  = margin + ((w - margin * 2) - tw) / 2;
+    if (tx < margin + 6) tx = margin + 6;
+    int ty  = y + (h - 8) / 2;
+    pageros_fonts_draw_text(canvas, tx, ty, g_toast.text, len,
+                            accent, w - margin * 2 - 12);
 }
 
 void pageros_widgets_chrome_scanlines(const pageros_fonts_canvas_t *canvas,

@@ -3,6 +3,6 @@
 idf_component_register(
     SRCS "src/widgets.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_common cbor_codec fonts
+    REQUIRES esp_common cbor_codec fonts esp_timer
     PRIV_REQUIRES log
 )

@@ -61,7 +61,7 @@ static struct {
     // doesn't pile up dozens of overlapping plays.
     QueueHandle_t ui_queue;
     TaskHandle_t  ui_task;
-} g = { .volume = 128 };
+} g = { .volume = 240 };
 
 // --- ES8311 minimal init -------------------------------------------- //
 
@@ -84,7 +84,7 @@ static esp_err_t es8311_init(void)
     if ((r = es8311_w(0x03, 0x10)) != ESP_OK) return r;  // 256x oversample
     if ((r = es8311_w(0x16, 0x24)) != ESP_OK) return r;  // dac soft ramp on
     if ((r = es8311_w(0x44, 0x08)) != ESP_OK) return r;  // dac mute off
-    if ((r = es8311_w(0x32, 0xBF)) != ESP_OK) return r;  // dac volume = ~0 dB
+    if ((r = es8311_w(0x32, 0xFF)) != ESP_OK) return r;  // dac volume = +5 dB (max)
     if ((r = es8311_w(0x37, 0x08)) != ESP_OK) return r;  // headphone path on
     return ESP_OK;
 }
