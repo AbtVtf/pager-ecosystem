@@ -1,0 +1,16 @@
+id: dm.pageros.app
+name: DM
+description: Direct one-to-one messages between two pagers, no groups needed.
+icon: https://demo.invalid/dm.png
+url: https://dm.pageros.demo/
+permissions:
+  - notifications
+  - groups
+lora_compatible: true
+multi_device: true
+categories:
+  - social
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1

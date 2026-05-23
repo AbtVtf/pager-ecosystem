@@ -1,0 +1,14 @@
+id: ssh.pageros.app
+name: SSH
+description: Quick SSH client — run one-shot commands on your servers from your pager.
+icon: https://demo.invalid/ssh.png
+url: https://ssh.pageros.demo/
+permissions: []
+lora_compatible: false
+multi_device: false
+categories:
+  - utilities
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1

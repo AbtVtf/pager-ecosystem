@@ -1,0 +1,15 @@
+id: maps.pageros.app
+name: Maps
+description: Search places, show them on a map, and find nearby points of interest.
+icon: https://demo.invalid/maps.png
+url: https://maps.pageros.demo/
+permissions:
+  - location
+lora_compatible: false
+multi_device: false
+categories:
+  - utilities
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1

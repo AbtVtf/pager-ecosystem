@@ -1,0 +1,14 @@
+id: wiki.pageros.app
+name: Wiki
+description: Search Wikipedia and read article summaries — knowledge in your pocket.
+icon: https://demo.invalid/wiki.png
+url: https://wiki.pageros.demo/
+permissions: []
+lora_compatible: false
+multi_device: false
+categories:
+  - education
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1

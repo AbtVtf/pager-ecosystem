@@ -1,0 +1,15 @@
+id: email.pageros.app
+name: Email
+description: IMAP inbox viewer with reply over SMTP. Keep your mail on your pager.
+icon: https://demo.invalid/email.png
+url: https://email.pageros.demo/
+permissions:
+  - notifications
+lora_compatible: false
+multi_device: false
+categories:
+  - communication
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1

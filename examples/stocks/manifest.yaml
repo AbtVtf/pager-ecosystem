@@ -1,0 +1,14 @@
+id: stocks.pageros.app
+name: Stocks
+description: Live stock and crypto watchlist — at a glance, on your pager.
+icon: https://demo.invalid/stocks.png
+url: https://stocks.pageros.demo/
+permissions: []
+lora_compatible: true
+multi_device: false
+categories:
+  - finance
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1

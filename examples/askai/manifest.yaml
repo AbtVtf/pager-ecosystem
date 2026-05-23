@@ -1,0 +1,14 @@
+id: askai.pageros.app
+name: Ask AI
+description: Chat with Claude on your pager. Pocket assistant for quick questions.
+icon: https://demo.invalid/askai.png
+url: https://askai.pageros.demo/
+permissions: []
+lora_compatible: false
+multi_device: false
+categories:
+  - productivity
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1

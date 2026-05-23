@@ -1,0 +1,14 @@
+id: translate.pageros.app
+name: Translate
+description: Translate text between 12 languages over LibreTranslate.
+icon: https://demo.invalid/translate.png
+url: https://translate.pageros.demo/
+permissions: []
+lora_compatible: true
+multi_device: false
+categories:
+  - utilities
+maintainer:
+  name: PagerOS demo
+  contact: demo@pageros.test
+version: 1
