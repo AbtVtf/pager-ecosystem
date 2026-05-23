@@ -170,6 +170,11 @@ typedef struct {
     int   focus_index;
     bool  rail_active;            // true: rail focus highlights tinted accent
     bool  close_mode;             // SPACE-toggled: ENTER closes instead of switches
+
+    // Optional 96×48 RGB565 sprite of the currently foregrounded app.
+    // When non-NULL the rail draws a thumbnail of it (nearest-neighbour
+    // scaled to ~64×32) at the top, above the HOME row.
+    const uint16_t *fg_icon;
 } pageros_chrome_rail_t;
 
 // 80 px-wide left rail spanning the body region (between top/bot bars).

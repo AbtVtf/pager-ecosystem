@@ -100,7 +100,8 @@ typedef enum {
     FOCUS_RAIL,               // encoder cycles HOME + open-apps on the rail
 } focus_mode_t;
 
-#define MAX_DESKTOP_TILES 12
+#define MAX_DESKTOP_TILES 24
+#define DESKTOP_PER_PAGE  9
 
 static struct {
     shell_page_t page;
@@ -520,7 +521,7 @@ static void desktop_refresh_tiles(void)
         // Surface the unread count as a badge on the NOTIFS tile.
         s.tiles[s.tile_count].unread =
             (strcmp(builtin[i].href, "builtin:notif") == 0) ? s.notif_count : 0;
-        s.tiles[s.tile_count].icon_rgb565 = NULL;  // builtins keep the letter glyph
+        s.tiles[s.tile_count].icon_rgb565 = pageros_builtin_icon_for(builtin[i].href);
         s.tile_count++;
     }
 
@@ -614,9 +615,21 @@ static void draw_rail(pageros_fonts_canvas_t *canvas)
         .focus_index = s.focus_mode == FOCUS_RAIL ? s.rail_index : -1,
         .rail_active = s.focus_mode == FOCUS_RAIL,
         .close_mode  = s.rail_close_mode && s.focus_mode == FOCUS_RAIL,
+        .fg_icon     = NULL,
     };
     for (int i = 0; i < s.rail_count; i++) {
         rail.items[i] = s.rail_items[i];
+    }
+    // When a third-party app is in the foreground, show its icon at the
+    // top of the rail. Builtin pages (settings, store, …) get their tile
+    // icon via the same lookup. Skip on the desktop — the grid already
+    // shows everything.
+    if (s.page != SHELL_PAGE_DESKTOP && s.page != SHELL_PAGE_LOCK) {
+        const char *fg_id = pageros_apprt_foreground_id();
+        if (fg_id && *fg_id) {
+            rail.fg_icon = pageros_app_icon_for(fg_id);
+            if (!rail.fg_icon) rail.fg_icon = pageros_builtin_icon_for(fg_id);
+        }
     }
     pageros_widgets_chrome_rail(canvas, &g_palette, &rail);
 }
@@ -644,10 +657,29 @@ static void render_desktop(pageros_fonts_canvas_t *canvas,
     int vp_w = canvas->w - rail_width();
     int vp_h = canvas->h - 2 * PAGEROS_CHROME_BAR_H;
 
-    int focus = (s.focus_mode == FOCUS_VIEWPORT) ? s.tile_index : -1;
+    // Slice the tile array to the current 3×3 page; the renderer is
+    // page-agnostic so we pass it just the slice + page-local focus.
+    int per_page = DESKTOP_PER_PAGE;
+    int pages    = (s.tile_count + per_page - 1) / per_page;
+    int page     = s.tile_index / per_page;
+    int slot     = s.tile_index % per_page;
+    int start    = page * per_page;
+    int count    = s.tile_count - start;
+    if (count > per_page) count = per_page;
+    int focus = (s.focus_mode == FOCUS_VIEWPORT) ? slot : -1;
     pageros_widgets_chrome_tile_grid(canvas, &g_palette,
-                                     s.tiles, s.tile_count,
+                                     &s.tiles[start], count,
                                      focus, vp_x, vp_y, vp_w, vp_h);
+
+    // Page indicator — small "p/N" in the bottom-right of the viewport.
+    if (pages > 1) {
+        char pi[24];
+        snprintf(pi, sizeof(pi), "%d/%d", page + 1, pages);
+        int pw = pageros_fonts_measure_text(pi, -1);
+        pageros_fonts_draw_text(canvas, vp_x + vp_w - pw - 4,
+                                vp_y + vp_h - 12, pi, -1,
+                                g_palette.dim, pw + 2);
+    }
 
     // Light scanline overlay for the cyberpunk vibe — only in the
     // viewport so the chrome stays crisp.
@@ -2367,8 +2399,21 @@ static void viewport_advance_focus(int step)
     int stops[8]; int n_stops = 0;
     switch (s.page) {
     case SHELL_PAGE_DESKTOP: {
+        // Encoder = page navigation across the 3×3 grid. Jump by a full
+        // page; preserve the in-page slot (clamped to the new page's range).
         if (s.tile_count <= 0) return;
-        s.tile_index = (s.tile_index + step + s.tile_count) % s.tile_count;
+        int per_page = DESKTOP_PER_PAGE;
+        int pages = (s.tile_count + per_page - 1) / per_page;
+        if (pages <= 1) return;  // single page — nothing to scroll
+        int cur_page  = s.tile_index / per_page;
+        int slot      = s.tile_index % per_page;
+        int new_page  = (cur_page + step + pages) % pages;
+        int max_slot  = (new_page == pages - 1)
+                        ? (s.tile_count - new_page * per_page)
+                        : per_page;
+        if (slot >= max_slot) slot = max_slot - 1;
+        if (slot < 0)         slot = 0;
+        s.tile_index  = new_page * per_page + slot;
         return;
     }
     case SHELL_PAGE_SETTINGS: {
@@ -2891,6 +2936,23 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
     case PAGEROS_ROUTER_EVT_KEY: {
         if (!ev->as.key.pressed) return true;
         char ch = kb_decode(ev->as.key.row, ev->as.key.col);
+        // Number-key shortcut on the desktop: 1-9 jumps focus to that
+        // tile within the current page. The encoder click then launches it.
+        if (s.page == SHELL_PAGE_DESKTOP && s.focus_mode == FOCUS_VIEWPORT
+                && ch >= '1' && ch <= '9') {
+            int slot = ch - '1';
+            int per_page = DESKTOP_PER_PAGE;
+            int cur_page = s.tile_index / per_page;
+            int max_slot = (cur_page == (s.tile_count - 1) / per_page)
+                           ? (s.tile_count - cur_page * per_page)
+                           : per_page;
+            if (slot < max_slot) {
+                s.tile_index = cur_page * per_page + slot;
+                pageros_audio_play_ui_scroll();
+                render_screen();
+            }
+            return true;
+        }
         // SPACE on the rail toggles close-mode regardless of text-input
         // state. This is a global rail gesture, so it shadows the
         // normal "append to focused text buffer" path.

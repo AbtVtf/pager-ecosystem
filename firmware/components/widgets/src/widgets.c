@@ -779,13 +779,34 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
     // Vertical divider on the right edge.
     pageros_widgets_fill_rect(canvas, rail_x + rail_w - 1, rail_y, 1, rail_h, pal->info);
 
+    // Foregrounded-app thumbnail at the top of the rail. Nearest-neighbour
+    // downsample the 96×48 source to 64×32 so it fits inside the 80-wide rail.
+    int hdr_h = 0;
+    if (rail->fg_icon) {
+        int dst_w = 64, dst_h = 32;
+        int dx = rail_x + (rail_w - dst_w) / 2;
+        int dy = rail_y + 4;
+        for (int j = 0; j < dst_h; j++) {
+            int sy = j * 48 / dst_h;
+            for (int k = 0; k < dst_w; k++) {
+                int sx = k * 96 / dst_w;
+                pix(canvas, dx + k, dy + j, rail->fg_icon[sy * 96 + sx]);
+            }
+        }
+        // Thin underline to separate the thumbnail from the row list.
+        pageros_widgets_fill_rect(canvas, rail_x + 4, dy + dst_h + 3,
+                                  rail_w - 9, 1, pal->dim);
+        hdr_h = dst_h + 10;  // icon + paddings
+    }
+
     int n = 1 + (rail->n_items > 0 ? rail->n_items : 0);
     if (n > 1 + PAGEROS_CHROME_RAIL_MAX_APPS) n = 1 + PAGEROS_CHROME_RAIL_MAX_APPS;
 
     int row_h = 24;
     int total_h = n * row_h;
-    int start_y = rail_y + (rail_h - total_h) / 2;
-    if (start_y < rail_y + 4) start_y = rail_y + 4;
+    int avail_h = rail_h - hdr_h;
+    int start_y = rail_y + hdr_h + (avail_h - total_h) / 2;
+    if (start_y < rail_y + hdr_h + 4) start_y = rail_y + hdr_h + 4;
 
     // In close-mode the whole rail tints red so the user can't miss it.
     uint16_t close_color = pal->error;
@@ -868,21 +889,24 @@ void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
         return;
     }
 
-    // 4×3 launcher grid — each tile shows a 32×32 first-letter glyph
-    // and nothing else. The tile name appears in the bottom-bar's
-    // rightmost slot when the user focuses it (see chrome_botbar).
-    int cols = 4;
+    // 3×3 launcher grid — each tile holds a 96×48 RGB565 sprite (or
+    // letter glyph fallback) plus a number badge 1-9 the user can type
+    // to highlight directly. Caller is responsible for paging (passes
+    // the current page's slice as tiles[]).
+    int cols = 3;
     int rows = 3;
     int per_page = cols * rows;
     int total = n_tiles < per_page ? n_tiles : per_page;
-    // TODO: paging when n_tiles > per_page. For v1 the grid clamps.
 
     int pad = 6;
     int tile_w = (w - pad * (cols + 1)) / cols;
     int tile_h = (h - pad * (rows + 1)) / rows;
 
-    int icon_scale = 2;
-    int icon_size  = 16 * icon_scale;     // 32 px square
+    int icon_w = 96;
+    int icon_h = 48;
+    // Clamp the sprite to the tile so a future smaller tile won't overflow.
+    if (icon_w > tile_w - 4) icon_w = tile_w - 4;
+    if (icon_h > tile_h - 4) icon_h = tile_h - 4;
 
     for (int i = 0; i < total; i++) {
         int r = i / cols;
@@ -891,53 +915,58 @@ void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
         int ty = y + pad + r * (tile_h + pad);
         bool focused = (i == focus_index);
 
-        // Frame: corner brackets (cyberpunk targeting reticle) when
-        // unfocused; full rect + inner glow when focused.
+        // Frame: corner brackets when unfocused; full rect + inner glow when focused.
         uint16_t border = focused ? pal->accent : pal->info;
         if (focused) {
             pageros_widgets_outline_rect(canvas, tx, ty, tile_w, tile_h, border);
             pageros_widgets_outline_rect(canvas, tx + 2, ty + 2,
                                          tile_w - 4, tile_h - 4, border);
         } else {
-            int b = 5;   // bracket length
-            // top-left
+            int b = 5;
             pageros_widgets_fill_rect(canvas, tx, ty, b, 1, border);
             pageros_widgets_fill_rect(canvas, tx, ty, 1, b, border);
-            // top-right
             pageros_widgets_fill_rect(canvas, tx + tile_w - b, ty, b, 1, border);
             pageros_widgets_fill_rect(canvas, tx + tile_w - 1, ty, 1, b, border);
-            // bot-left
             pageros_widgets_fill_rect(canvas, tx, ty + tile_h - 1, b, 1, border);
             pageros_widgets_fill_rect(canvas, tx, ty + tile_h - b, 1, b, border);
-            // bot-right
             pageros_widgets_fill_rect(canvas, tx + tile_w - b, ty + tile_h - 1,
                                       b, 1, border);
             pageros_widgets_fill_rect(canvas, tx + tile_w - 1, ty + tile_h - b,
                                       1, b, border);
         }
 
-        // Icon: prefer a per-app 32×32 RGB565 sprite (see pageros_app_icons.h);
-        // fall back to a chunky first-letter glyph when none is registered.
-        int ix = tx + (tile_w - icon_size) / 2;
-        int iy = ty + (tile_h - icon_size) / 2;
+        // Icon: blit per-app 96×48 RGB565 sprite when present; fall back to
+        // first-letter glyph.
+        int ix = tx + (tile_w - icon_w) / 2;
+        int iy = ty + (tile_h - icon_h) / 2;
         uint16_t fg = focused ? pal->fg : pal->info;
         const uint16_t *sprite = tiles[i].icon_rgb565;
         if (sprite) {
-            for (int j = 0; j < icon_size; j++) {
-                for (int k = 0; k < icon_size; k++) {
-                    pix(canvas, ix + k, iy + j, sprite[j * icon_size + k]);
+            for (int j = 0; j < icon_h; j++) {
+                for (int k = 0; k < icon_w; k++) {
+                    pix(canvas, ix + k, iy + j, sprite[j * 96 + k]);
                 }
             }
         } else {
+            int icon_scale = 2;
+            int gly = 16 * icon_scale;
+            int gx = tx + (tile_w - gly) / 2;
+            int gy = ty + (tile_h - gly) / 2;
             const char *name = tiles[i].name ? tiles[i].name : "?";
             char ch = name[0];
             if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
             if (ch == '\0') ch = '?';
-            pageros_fonts_draw_glyph_scaled_16(canvas, ix, iy, (uint32_t)ch,
+            pageros_fonts_draw_glyph_scaled_16(canvas, gx, gy, (uint32_t)ch,
                                                fg, icon_scale);
         }
 
-        // Unread badge: a small magenta dot in the top-right corner.
+        // Number badge "1"-"9" — top-left of tile, on the accent palette.
+        char badge[2] = { (char)('1' + i), '\0' };
+        pageros_fonts_draw_text_16(canvas, tx + 4, ty + 2, badge, -1,
+                                   focused ? pal->accent : pal->info,
+                                   tile_w - 8);
+
+        // Unread badge — small accent dot in the top-right.
         if (tiles[i].unread > 0) {
             int d = 5;
             pageros_widgets_fill_rect(canvas, tx + tile_w - d - 3, ty + 3,
