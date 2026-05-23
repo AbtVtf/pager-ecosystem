@@ -15,11 +15,13 @@
 
 static const char *TAG = "sideload";
 
-// Extract the "id" text field from a manifest's CBOR map.
-static int extract_app_id(const uint8_t *cbor, size_t len,
-                          char *out, size_t cap)
+// Extract a top-level text-string field by name from a manifest's CBOR map.
+// Returns the field length on success, -1 on missing/non-text/over-capacity.
+static int extract_text_field(const uint8_t *cbor, size_t len,
+                              const char *key, char *out, size_t cap)
 {
     if (cap < 2) return -1;
+    size_t klen = strlen(key);
     uint8_t arena_buf[1024];
     pgr_cbor_arena_t arena; pgr_cbor_arena_init(&arena, arena_buf, sizeof(arena_buf));
     pgr_cbor_value_t *root = NULL;
@@ -28,16 +30,29 @@ static int extract_app_id(const uint8_t *cbor, size_t len,
     for (size_t i = 0; i < root->v.map.len; i++) {
         const pgr_cbor_pair_t *p = &root->v.map.items[i];
         if (p->key.kind != PGR_CBOR_KIND_TEXT) continue;
-        if (p->key.v.bytes.len == 2 && memcmp(p->key.v.bytes.data, "id", 2) == 0) {
-            if (p->val.kind != PGR_CBOR_KIND_TEXT) return -1;
-            size_t l = p->val.v.bytes.len;
-            if (l == 0 || l >= cap) return -1;
-            memcpy(out, p->val.v.bytes.data, l);
-            out[l] = '\0';
-            return (int)l;
-        }
+        if (p->key.v.bytes.len != klen) continue;
+        if (memcmp(p->key.v.bytes.data, key, klen) != 0) continue;
+        if (p->val.kind != PGR_CBOR_KIND_TEXT) return -1;
+        size_t l = p->val.v.bytes.len;
+        if (l == 0 || l >= cap) return -1;
+        memcpy(out, p->val.v.bytes.data, l);
+        out[l] = '\0';
+        return (int)l;
     }
     return -1;
+}
+
+static int extract_app_id(const uint8_t *cbor, size_t len,
+                          char *out, size_t cap)
+{
+    return extract_text_field(cbor, len, "id", out, cap);
+}
+
+int pageros_sideload_extract_field(const uint8_t *cbor, size_t cbor_len,
+                                   const char *key, char *out, size_t cap)
+{
+    if (!cbor || !key || !out) return -1;
+    return extract_text_field(cbor, cbor_len, key, out, cap);
 }
 
 esp_err_t pageros_sideload_install_from_url(const char *url,
@@ -76,6 +91,13 @@ esp_err_t pageros_sideload_install_from_url(const char *url,
     }
     ESP_LOGI(TAG, "extracted app_id='%s'", app_id);
 
+    // Extract the manifest's own `url` so we can save it as source_url
+    // — for store installs the URL we were passed is the registry endpoint
+    // (`<base>/apps/<id>`), not the app server. Done before freeing `buf`.
+    char manifest_url[200];
+    int url_len = extract_text_field(buf, mlen, "url",
+                                     manifest_url, sizeof(manifest_url));
+
     char dir[256], path[300];
     snprintf(dir, sizeof(dir), "%s/%s", PAGEROS_DIR_APPS, app_id);
     esp_err_t mk = pageros_storage_mkdir_p(dir);
@@ -95,12 +117,15 @@ esp_err_t pageros_sideload_install_from_url(const char *url,
     f = fopen(path, "wb");
     if (f) { fclose(f); }
 
-    // Persist the user-supplied base URL so the app launcher can fetch
-    // Frames from it later (the manifest itself doesn't include the
-    // URL because that depends on where the user is hosting the app).
+    // Persist whichever URL actually points at the app's HTTP server.
+    // Sideload-by-URL hits the app directly, so the install URL is correct;
+    // store install passes a registry endpoint and needs the manifest's url.
+    const char *source_url = (url_len > 0) ? manifest_url : url;
     snprintf(path, sizeof(path), "%s/.source_url", dir);
     f = fopen(path, "wb");
-    if (f) { fwrite(url, 1, strlen(url), f); fclose(f); }
+    if (f) { fwrite(source_url, 1, strlen(source_url), f); fclose(f); }
+    ESP_LOGI(TAG, "source_url=%s (%s)", source_url,
+             url_len > 0 ? "from manifest" : "from install url");
 
     strncpy(out_app_id, app_id, cap - 1);
     out_app_id[cap - 1] = '\0';

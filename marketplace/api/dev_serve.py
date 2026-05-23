@@ -23,6 +23,10 @@ import os
 import socket
 from pathlib import Path
 
+import httpx
+from fastapi import HTTPException, Request
+from starlette.responses import Response as StarletteResponse
+
 from pageros_marketplace.manifest import Maintainer, Manifest, load_manifest
 from pageros_marketplace.registry import Registry, create_app
 
@@ -168,3 +172,85 @@ def _build_registry() -> Registry:
 
 # Module-level `app` so `uvicorn dev_serve:app` works.
 app = create_app(registry=_build_registry(), challenge_required=False)
+
+
+# --------------------------------------------------------------------------- #
+# Dev-only sideload proxy
+#
+# The on-device sideloader (firmware/components/sideload/src/sideload.c) saves
+# whatever URL it was passed as `<app_dir>/.source_url`, and the launcher then
+# GETs that URL to fetch the home Frame. Until the firmware learns to use the
+# manifest's `url` field instead of the install URL, we proxy every path under
+# `/apps/<id>/...` to the actual app server so launches return a real Frame.
+# --------------------------------------------------------------------------- #
+
+_proxy_client = httpx.Client(timeout=15.0, follow_redirects=False)
+
+# Map full manifest id → short examples/ dir name, derived from APP_PORTS.
+_SHORT_BY_ID: dict[str, str] = {}
+for _short_name in APP_PORTS:
+    _SHORT_BY_ID[f"{_short_name}.pageros.app"] = _short_name
+
+
+def _resolve_app_port(app_id: str) -> int | None:
+    short = _SHORT_BY_ID.get(app_id)
+    if short is None:
+        # Fallback: first dot-segment.
+        short = app_id.split(".", 1)[0]
+    return APP_PORTS.get(short)
+
+
+_HOP_BY_HOP = {
+    "host", "content-length", "connection", "keep-alive",
+    "transfer-encoding", "upgrade", "proxy-authenticate",
+    "proxy-authorization", "te", "trailers",
+}
+
+
+async def _proxy_to_app(app_id: str, request: Request, rest: str = ""):
+    port = _resolve_app_port(app_id)
+    if port is None:
+        raise HTTPException(404, f"unknown app: {app_id}")
+    qs = request.url.query
+    target = f"http://127.0.0.1:{port}/{rest}" + (f"?{qs}" if qs else "")
+    body = await request.body()
+    fwd_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in _HOP_BY_HOP
+    }
+    try:
+        upstream = _proxy_client.request(
+            request.method, target,
+            content=body if body else None,
+            headers=fwd_headers,
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(502, f"upstream error: {exc}") from exc
+    resp_headers = {
+        k: v for k, v in upstream.headers.items()
+        if k.lower() not in _HOP_BY_HOP
+    }
+    return StarletteResponse(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=resp_headers,
+        media_type=upstream.headers.get("content-type"),
+    )
+
+
+# The home-Frame fetch hits `<source_url>/` with trailing slash, so register
+# both the bare and the path-suffixed forms. FastAPI matches earlier routes
+# first, so the explicit `/.pageros/manifest.cbor` and `GET /apps/{id}` routes
+# inside create_app() still win.
+app.add_api_route(
+    "/apps/{app_id}/",
+    _proxy_to_app,
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
+app.add_api_route(
+    "/apps/{app_id}/{rest:path}",
+    _proxy_to_app,
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)

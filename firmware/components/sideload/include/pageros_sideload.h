@@ -9,6 +9,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -21,6 +22,12 @@ extern "C" {
 
 esp_err_t pageros_sideload_install_from_url(const char *url,
                                             char *out_app_id, size_t cap);
+
+// Extract a top-level text-string field from a CBOR-encoded manifest.
+// Returns the field length on success, -1 if missing / non-text / over cap.
+// Used by the shell desktop to read `name` from a stored manifest.cbor.
+int pageros_sideload_extract_field(const uint8_t *cbor, size_t cbor_len,
+                                   const char *key, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

@@ -54,6 +54,8 @@
 #include "pageros_xl9555.h"
 #include "selftest.h"
 
+#include "cJSON.h"
+
 static const char *TAG = "pageros";
 
 __attribute__((unused)) static const char *router_nav_name(pageros_router_nav_t n)
@@ -85,6 +87,11 @@ typedef enum {
     SHELL_PAGE_IDQR,
     SHELL_PAGE_NFC,
     SHELL_PAGE_SET_PIN,
+
+    // Built-in STORE (marketplace browser, MKT-005).
+    SHELL_PAGE_STORE_HOME,       // scrollable app list
+    SHELL_PAGE_STORE_DETAIL,     // single app: install / tip
+    SHELL_PAGE_STORE_URL,        // editable backend URL
 } shell_page_t;
 
 typedef enum {
@@ -155,6 +162,28 @@ static struct {
     // --- NFC ------------------------------------------------------ //
     char nfc_last_uid[32];
     char nfc_status[64];
+
+    // --- STORE (marketplace browser, MKT-005) -------------------- //
+    //
+    // Native renderer: pulls JSON from `<base_url>/apps` and serves
+    // its own home / detail / url-config screens. Install button
+    // hands off to pageros_sideload_install_from_url with the path
+    // `<base_url>/apps/<id>` (registry serves the CBOR manifest at
+    // `<that>/.pageros/manifest.cbor`).
+    char store_base_url[160];          // persisted in NVS, default = LAN dev box
+    struct store_entry {
+        char id[80];                   // manifest.id (reverse-DNS)
+        char name[32];
+        char desc[80];                 // first line of description, truncated
+        bool has_donate;
+        bool lora;                     // lora_compatible
+    } store_apps[12];
+    int  store_app_count;
+    int  store_focus;                  // index into store_apps for HOME
+    int  store_detail_idx;             // app being viewed in DETAIL
+    int  store_detail_focus;           // 0=Install, 1=Tip (when has_donate)
+    char store_status[96];             // banner: "FETCHING…" / "WI-FI OFF" / errors
+    bool store_busy;                   // true while an HTTP call is in flight
 
     // --- Rail close-mode -------------------------------------------- //
     bool rail_close_mode;
@@ -371,6 +400,11 @@ static const char *current_cache_id(bool *out_is_builtin)
     case SHELL_PAGE_QUICK:
         if (out_is_builtin) *out_is_builtin = true;
         return "builtin:quick";
+    case SHELL_PAGE_STORE_HOME:
+    case SHELL_PAGE_STORE_DETAIL:
+    case SHELL_PAGE_STORE_URL:
+        if (out_is_builtin) *out_is_builtin = true;
+        return "builtin:store";
     default:
         return NULL;
     }
@@ -465,6 +499,7 @@ static void desktop_refresh_tiles(void)
     // "builtin:X" href routed by handle_button_href.
     struct { const char *href; const char *name; } builtin[] = {
         { "shell:settings",  "SETTINGS" },
+        { "builtin:store",   "STORE"    },
         { "builtin:notif",   "NOTIFS"   },
         { "builtin:quick",   "QUICK"    },
         { "builtin:notes",   "NOTES"    },
@@ -494,9 +529,7 @@ static void desktop_refresh_tiles(void)
         struct dirent *e;
         while ((e = readdir(d)) && s.tile_count < MAX_DESKTOP_TILES) {
             if (e->d_name[0] == '.') continue;
-            // Use last segment of dotted id as the display name.
-            const char *dot = strrchr(e->d_name, '.');
-            const char *name = dot ? dot + 1 : e->d_name;
+
             // "open:<id>" href; renderer will upper-case for display.
             char short_id[80];
             strncpy(short_id, e->d_name, sizeof(short_id) - 1);
@@ -504,6 +537,41 @@ static void desktop_refresh_tiles(void)
             snprintf(s.tile_app_ids[s.tile_count],
                      sizeof(s.tile_app_ids[0]),
                      "open:%s", short_id);
+
+            // Prefer the manifest's `name` field — reverse-DNS ids like
+            // `news.pageros.app` produce useless "App" labels if we just
+            // strrchr('.'). Fall back to the last dot-segment when the
+            // manifest is missing or doesn't have a name.
+            char manifest_path[320];
+            snprintf(manifest_path, sizeof(manifest_path),
+                     "%s/%s/manifest.cbor",
+                     PAGEROS_DIR_APPS, e->d_name);
+            char display_name[64] = {0};
+            int got_name = -1;
+            FILE *mf = fopen(manifest_path, "rb");
+            if (mf) {
+                // Heap-alloc rather than stack: PAGEROS_SIDELOAD_MAX_MANIFEST
+                // is 2KB and the extractor needs another 1KB arena — too much
+                // for the 3584-byte main task stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE).
+                uint8_t *mbuf = (uint8_t *)malloc(PAGEROS_SIDELOAD_MAX_MANIFEST);
+                if (mbuf) {
+                    size_t mlen = fread(mbuf, 1, PAGEROS_SIDELOAD_MAX_MANIFEST, mf);
+                    if (mlen > 0) {
+                        got_name = pageros_sideload_extract_field(
+                            mbuf, mlen, "name",
+                            display_name, sizeof(display_name));
+                    }
+                    free(mbuf);
+                }
+                fclose(mf);
+            }
+            const char *name;
+            if (got_name > 0) {
+                name = display_name;
+            } else {
+                const char *dot = strrchr(e->d_name, '.');
+                name = dot ? dot + 1 : e->d_name;
+            }
             strncpy(s.tile_names[s.tile_count], name,
                     sizeof(s.tile_names[0]) - 1);
             s.tile_names[s.tile_count][sizeof(s.tile_names[0]) - 1] = '\0';
@@ -1205,6 +1273,380 @@ static void render_nfc(pageros_fonts_canvas_t *canvas,
     }
 }
 
+// --- STORE: native marketplace browser (MKT-005) ----------------- //
+//
+// Three screens, all rendered directly (no Frame pipeline):
+//   STORE_HOME    — scrollable list of apps from `<base>/apps`
+//   STORE_DETAIL  — single app, name + description + Install [+ Tip]
+//   STORE_URL     — editable backend URL (persisted to NVS)
+//
+// The marketplace registry serves a CBOR manifest at
+// `<base>/apps/<id>/.pageros/manifest.cbor` — exactly where the
+// existing sideload component expects it (FW-034). Install reuses
+// `pageros_sideload_install_from_url` so the on-disk format and
+// desktop-refresh logic stay in one place.
+
+#define STORE_NVS_NAMESPACE   "pageros_mkt"
+#define STORE_NVS_KEY_URL     "base_url"
+#define STORE_DEFAULT_URL     "http://192.168.0.191:8001"
+#define STORE_LIST_BUF_BYTES  (8 * 1024)
+
+static void store_url_load(void)
+{
+    s.store_base_url[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(STORE_NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = sizeof(s.store_base_url);
+        nvs_get_str(h, STORE_NVS_KEY_URL, s.store_base_url, &sz);
+        nvs_close(h);
+    }
+    if (s.store_base_url[0] == '\0') {
+        strncpy(s.store_base_url, STORE_DEFAULT_URL,
+                sizeof(s.store_base_url) - 1);
+        s.store_base_url[sizeof(s.store_base_url) - 1] = '\0';
+    }
+}
+
+static esp_err_t store_url_save(const char *url)
+{
+    if (!url) return ESP_ERR_INVALID_ARG;
+    nvs_handle_t h;
+    esp_err_t r = nvs_open(STORE_NVS_NAMESPACE, NVS_READWRITE, &h);
+    if (r != ESP_OK) return r;
+    r = nvs_set_str(h, STORE_NVS_KEY_URL, url);
+    if (r == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+    return r;
+}
+
+// Copy a JSON string field into `dst` with bounds.
+static void store_copy_str(char *dst, size_t cap, const cJSON *node)
+{
+    if (!dst || cap == 0) return;
+    dst[0] = '\0';
+    if (!cJSON_IsString(node) || !node->valuestring) return;
+    strncpy(dst, node->valuestring, cap - 1);
+    dst[cap - 1] = '\0';
+}
+
+// GET `<base>/apps?limit=12&featured_first=true`, parse into s.store_apps.
+// Returns ESP_OK on success (banner shows app count); sets s.store_status
+// with a human-readable error otherwise.
+static esp_err_t store_fetch_list(void)
+{
+    s.store_app_count = 0;
+    s.store_focus = 0;
+
+    if (!pageros_wifi_is_connected()) {
+        strncpy(s.store_status, "WI-FI OFF — SETTINGS → WI-FI",
+                sizeof(s.store_status) - 1);
+        s.store_status[sizeof(s.store_status) - 1] = '\0';
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char url[256];
+    int n = snprintf(url, sizeof(url),
+                     "%s/apps?limit=%d&featured_first=true",
+                     s.store_base_url,
+                     (int)(sizeof(s.store_apps) / sizeof(s.store_apps[0])));
+    if (n <= 0 || n >= (int)sizeof(url)) {
+        strncpy(s.store_status, "URL TOO LONG", sizeof(s.store_status) - 1);
+        s.store_status[sizeof(s.store_status) - 1] = '\0';
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    strncpy(s.store_status, "FETCHING…", sizeof(s.store_status) - 1);
+    s.store_status[sizeof(s.store_status) - 1] = '\0';
+    s.store_busy = true;
+
+    uint8_t *buf = (uint8_t *)malloc(STORE_LIST_BUF_BYTES);
+    if (!buf) {
+        s.store_busy = false;
+        strncpy(s.store_status, "OUT OF MEMORY", sizeof(s.store_status) - 1);
+        return ESP_ERR_NO_MEM;
+    }
+    pageros_https_response_t r = {0};
+    ESP_LOGI("store", "GET %s", url);
+    esp_err_t e = pageros_https_get(url, buf, STORE_LIST_BUF_BYTES - 1, &r);
+    s.store_busy = false;
+
+    if (e != ESP_OK || r.status_code / 100 != 2 || r.body_len == 0) {
+        snprintf(s.store_status, sizeof(s.store_status),
+                 "FETCH FAILED: %s (HTTP %d)",
+                 esp_err_to_name(e), r.status_code);
+        free(buf);
+        return e != ESP_OK ? e : ESP_FAIL;
+    }
+    buf[r.body_len] = '\0';
+
+    cJSON *root = cJSON_ParseWithLength((const char *)buf, r.body_len);
+    free(buf);
+    if (!root) {
+        strncpy(s.store_status, "BAD JSON FROM REGISTRY",
+                sizeof(s.store_status) - 1);
+        s.store_status[sizeof(s.store_status) - 1] = '\0';
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    cJSON *items = cJSON_GetObjectItemCaseSensitive(root, "items");
+    if (!cJSON_IsArray(items)) {
+        cJSON_Delete(root);
+        strncpy(s.store_status, "REGISTRY MISSING 'items'",
+                sizeof(s.store_status) - 1);
+        s.store_status[sizeof(s.store_status) - 1] = '\0';
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    int cap = (int)(sizeof(s.store_apps) / sizeof(s.store_apps[0]));
+    int total = cJSON_GetArraySize(items);
+    int kept = 0;
+    cJSON *entry;
+    cJSON_ArrayForEach(entry, items) {
+        if (kept >= cap) break;
+        cJSON *manifest = cJSON_GetObjectItemCaseSensitive(entry, "manifest");
+        if (!cJSON_IsObject(manifest)) continue;
+        struct store_entry *out = &s.store_apps[kept];
+        memset(out, 0, sizeof(*out));
+        store_copy_str(out->id,   sizeof(out->id),
+                       cJSON_GetObjectItemCaseSensitive(manifest, "id"));
+        store_copy_str(out->name, sizeof(out->name),
+                       cJSON_GetObjectItemCaseSensitive(manifest, "name"));
+        store_copy_str(out->desc, sizeof(out->desc),
+                       cJSON_GetObjectItemCaseSensitive(manifest, "description"));
+        cJSON *donate = cJSON_GetObjectItemCaseSensitive(manifest, "donate_url");
+        out->has_donate = cJSON_IsString(donate) && donate->valuestring
+                          && donate->valuestring[0];
+        cJSON *lora = cJSON_GetObjectItemCaseSensitive(manifest, "lora_compatible");
+        out->lora = cJSON_IsTrue(lora);
+        if (out->id[0]) kept++;
+    }
+    cJSON_Delete(root);
+    s.store_app_count = kept;
+    snprintf(s.store_status, sizeof(s.store_status),
+             "%d APP%s (%d TOTAL)", kept, kept == 1 ? "" : "S", total);
+    return ESP_OK;
+}
+
+static void render_store_home(pageros_fonts_canvas_t *canvas,
+                              pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
+
+    int x = rail_width() + 12, y = PAGEROS_CHROME_BAR_H + 8;
+
+    // Title row with a focusable cog at the right edge. The cog is row
+    // index -1; encoder cycles it together with the app entries below.
+    bool cog_focused = (s.store_focus == -1);
+    if (cog_focused) {
+        pageros_widgets_fill_rect(canvas, x - 4, y - 2,
+                                  canvas->w - 16, 22, g_palette.accent);
+    }
+    uint16_t title_fg = cog_focused ? g_palette.bg : g_palette.accent;
+    uint16_t cog_fg   = cog_focused ? g_palette.bg : g_palette.info;
+    pageros_fonts_draw_text_16(canvas, x, y, "STORE", -1, title_fg,
+                               canvas->w - 80);
+    const char *cog = "URL >";
+    int cw = pageros_fonts_measure_text_16(cog, -1);
+    int cog_x = canvas->w - cw - 16;
+    pageros_fonts_draw_text_16(canvas, cog_x, y, cog, -1, cog_fg,
+                               canvas->w);
+    y += 22;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    // Banner status line (FETCHING / errors / count).
+    if (s.store_status[0]) {
+        pageros_fonts_draw_text(canvas, x, y, s.store_status, -1,
+                                g_palette.dim, canvas->w - 24);
+        y += 12;
+    }
+
+    if (s.store_app_count == 0) {
+        const char *msg = s.store_busy ? "LOADING…" : "NO APPS";
+        pageros_fonts_draw_text_16(canvas, x, y + 12, msg, -1,
+                                   g_palette.dim, canvas->w);
+        return;
+    }
+
+    int row_h = 22;
+    int max_rows = (canvas->h - y - PAGEROS_CHROME_BAR_H - 8) / row_h;
+    if (max_rows < 1) max_rows = 1;
+    int start = 0;
+    if (s.store_focus >= max_rows) start = s.store_focus - max_rows + 1;
+    if (start < 0) start = 0;
+
+    for (int row = 0; row < max_rows && start + row < s.store_app_count; row++) {
+        int i = start + row;
+        int row_y = y + row * row_h;
+        bool focused = (i == s.store_focus);
+        if (focused) {
+            pageros_widgets_fill_rect(canvas, x - 4, row_y - 2,
+                                      canvas->w - 16, row_h,
+                                      g_palette.accent);
+        }
+        uint16_t fg = focused ? g_palette.bg : g_palette.fg;
+        uint16_t sub_fg = focused ? g_palette.bg : g_palette.dim;
+        const struct store_entry *e = &s.store_apps[i];
+        // Name + LoRa marker (mesh-friendly apps stand out).
+        char hdr[40];
+        snprintf(hdr, sizeof(hdr), "%s%s", e->name, e->lora ? " [L]" : "");
+        pageros_fonts_draw_text_16(canvas, x, row_y, hdr, -1, fg,
+                                   canvas->w - x - 16);
+        if (e->desc[0]) {
+            pageros_fonts_draw_text(canvas, x, row_y + 14, e->desc, -1,
+                                    sub_fg, canvas->w - x - 16);
+        }
+    }
+}
+
+static void render_store_detail(pageros_fonts_canvas_t *canvas,
+                                pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
+
+    int x = rail_width() + 12, y = PAGEROS_CHROME_BAR_H + 8;
+
+    if (s.store_detail_idx < 0 || s.store_detail_idx >= s.store_app_count) {
+        pageros_fonts_draw_text_16(canvas, x, y, "NO APP", -1,
+                                   g_palette.dim, canvas->w);
+        return;
+    }
+    const struct store_entry *e = &s.store_apps[s.store_detail_idx];
+
+    pageros_fonts_draw_text_16(canvas, x, y, e->name, -1,
+                               g_palette.accent, canvas->w - 20);
+    y += 22;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    // ID dim label.
+    pageros_fonts_draw_text(canvas, x, y, e->id, -1, g_palette.dim,
+                            canvas->w - 24);
+    y += 14;
+    if (e->lora) {
+        pageros_fonts_draw_text(canvas, x, y, "LORA-COMPATIBLE", -1,
+                                g_palette.info, canvas->w - 24);
+        y += 12;
+    }
+    // Description — wrap on 60 cols (rough).
+    if (e->desc[0]) {
+        char line[64];
+        const char *p = e->desc;
+        int col = 0;
+        int line_h = 12;
+        while (*p) {
+            if (*p == '\n' || col >= 60) {
+                line[col] = '\0';
+                pageros_fonts_draw_text(canvas, x, y, line, -1,
+                                        g_palette.fg, canvas->w - 24);
+                y += line_h;
+                col = 0;
+                if (*p == '\n') p++;
+                continue;
+            }
+            if (col + 1 < (int)sizeof(line)) line[col++] = *p;
+            p++;
+        }
+        if (col > 0) {
+            line[col] = '\0';
+            pageros_fonts_draw_text(canvas, x, y, line, -1, g_palette.fg,
+                                    canvas->w - 24);
+            y += line_h;
+        }
+    }
+
+    // Status banner (install result / errors) above the buttons.
+    if (s.store_status[0]) {
+        pageros_fonts_draw_text(canvas, x, y, s.store_status, -1,
+                                g_palette.dim, canvas->w - 24);
+        y += 14;
+    }
+
+    // Buttons: Install, Tip (if has_donate).
+    struct { const char *label; bool present; } btns[] = {
+        { s.store_busy ? "INSTALLING…" : "[ INSTALL ]", true },
+        { "[ TIP DEVELOPER ]", e->has_donate },
+    };
+    int n_btns = 0;
+    for (size_t i = 0; i < sizeof(btns) / sizeof(btns[0]); i++) {
+        if (btns[i].present) n_btns++;
+    }
+    if (s.store_detail_focus >= n_btns) s.store_detail_focus = 0;
+
+    int btn_y = y + 6;
+    int row_h = 22;
+    int idx = 0;
+    for (size_t i = 0; i < sizeof(btns) / sizeof(btns[0]); i++) {
+        if (!btns[i].present) continue;
+        bool focused = (idx == s.store_detail_focus);
+        int row_y = btn_y + idx * row_h;
+        if (focused) {
+            pageros_widgets_fill_rect(canvas, x - 4, row_y - 2,
+                                      canvas->w - 16, row_h,
+                                      g_palette.accent);
+        }
+        uint16_t fg = focused ? g_palette.bg : g_palette.fg;
+        pageros_fonts_draw_text_16(canvas, x, row_y, btns[i].label, -1,
+                                   fg, canvas->w);
+        idx++;
+    }
+}
+
+static void render_store_url(pageros_fonts_canvas_t *canvas,
+                             pageros_chrome_state_t *cs)
+{
+    pageros_widgets_fill_rect(canvas, 0, 0, canvas->w, canvas->h, g_palette.bg);
+    cs->focused_label = NULL;
+    pageros_widgets_chrome_topbar(canvas, &g_palette, cs);
+    pageros_widgets_chrome_botbar(canvas, &g_palette, cs);
+    draw_rail(canvas);
+
+    int x = rail_width() + 12, y = PAGEROS_CHROME_BAR_H + 8;
+    pageros_fonts_draw_text_16(canvas, x, y, "STORE BACKEND URL", -1,
+                               g_palette.accent, canvas->w - 20);
+    y += 22;
+    pageros_widgets_fill_rect(canvas, x, y - 4, canvas->w - 24, 1,
+                              g_palette.info);
+
+    pageros_fonts_draw_text(canvas, x, y,
+                            "TYPE THE MARKETPLACE BASE URL, ENTER TO SAVE.", -1,
+                            g_palette.dim, canvas->w - 24);
+    y += 14;
+    pageros_fonts_draw_text(canvas, x, y,
+                            "BACK = BACKSPACE — LONG BACK = HOME.", -1,
+                            g_palette.dim, canvas->w - 24);
+    y += 18;
+
+    // URL field — outline box.
+    int box_h = 24;
+    pageros_widgets_outline_rect(canvas, x - 4, y, canvas->w - x - 16,
+                                 box_h, g_palette.info);
+    pageros_fonts_draw_text(canvas, x, y + 6, s.store_base_url, -1,
+                            g_palette.fg, canvas->w - x - 24);
+    // Cursor blob at end.
+    int tw = pageros_fonts_measure_text(s.store_base_url, -1);
+    pageros_widgets_fill_rect(canvas, x + tw + 1, y + 4, 2, box_h - 8,
+                              g_palette.accent);
+    y += box_h + 12;
+
+    // Hint with default URL.
+    char def[200];
+    snprintf(def, sizeof(def), "DEFAULT: %s", STORE_DEFAULT_URL);
+    pageros_fonts_draw_text(canvas, x, y, def, -1, g_palette.dim,
+                            canvas->w - 24);
+    y += 14;
+    pageros_fonts_draw_text(canvas, x, y,
+                            "TAP SPACE TWICE TO RESTORE DEFAULT.", -1,
+                            g_palette.dim, canvas->w - 24);
+}
+
 static void render_screen(void)
 {
     rail_refresh();
@@ -1233,6 +1675,9 @@ static void render_screen(void)
     case SHELL_PAGE_IDQR:      render_idqr(&canvas, &cs); break;
     case SHELL_PAGE_NFC:       render_nfc(&canvas, &cs); break;
     case SHELL_PAGE_SET_PIN:   render_set_pin(&canvas, &cs); break;
+    case SHELL_PAGE_STORE_HOME:   render_store_home(&canvas, &cs); break;
+    case SHELL_PAGE_STORE_DETAIL: render_store_detail(&canvas, &cs); break;
+    case SHELL_PAGE_STORE_URL:    render_store_url(&canvas, &cs); break;
     }
     // Toast banner floats above everything (after content + scanlines).
     pageros_widgets_chrome_toast(&canvas, &g_palette);
@@ -1241,12 +1686,21 @@ static void render_screen(void)
 
 // --- Mount helpers ------------------------------------------------ //
 
+// Built-in shell pages (Settings / Wi-Fi / Add-app) share the apprt
+// foreground slot under a stable ID so set_frame keeps working across
+// page changes. apprt_open will reuse the same frame slot when called
+// with an id that's already foreground (apprt.c:298).
+#define SHELL_BUILTIN_APP_ID "shell:builtin"
+
 static esp_err_t mount_and_set(esp_err_t (*emit)(uint8_t *, size_t, size_t *))
 {
     uint8_t buf[768]; size_t n = 0;
     esp_err_t r = emit(buf, sizeof(buf), &n);
     if (r != ESP_OK) return r;
-    return pageros_apprt_set_frame(buf, n);
+    // Use apprt_open instead of set_frame so the call also works on a
+    // fresh boot where no foreground app has been opened yet. Re-open
+    // with the same id is cheap (drops nothing, just reloads bytes).
+    return pageros_apprt_open(SHELL_BUILTIN_APP_ID, buf, n);
 }
 
 static void mount_desktop(void)
@@ -1271,7 +1725,10 @@ static void mount_settings(void)
     s.text_buf = NULL; s.text_cap = 0;
     uint8_t buf[768]; size_t n = 0;
     if (pageros_shell_emit_settings(buf, sizeof(buf), &n) == ESP_OK) {
-        pageros_apprt_set_frame(buf, n);
+        esp_err_t r = pageros_apprt_open(SHELL_BUILTIN_APP_ID, buf, n);
+        if (r != ESP_OK) {
+            ESP_LOGW("shell", "settings apprt_open: %s", esp_err_to_name(r));
+        }
     }
     render_screen();
 }
@@ -1405,6 +1862,108 @@ static void mount_nfc(void)
     s.nfc_status[sizeof(s.nfc_status) - 1] = '\0';
     s.text_input_widget = -1;
     s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_store_home(void)
+{
+    ESP_LOGI("shell", "mount_store_home base='%s'", s.store_base_url);
+    s.page = SHELL_PAGE_STORE_HOME;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    s.store_status[0] = '\0';
+    // Paint the screen before fetching so the user sees "FETCHING…"
+    // instead of a frozen home grid while the HTTP call blocks.
+    render_screen();
+    (void)store_fetch_list();
+    // Land on the first app if any loaded; otherwise on the URL row.
+    if (s.store_app_count > 0) s.store_focus = 0;
+    else                       s.store_focus = -1;
+    render_screen();
+}
+
+static void mount_store_detail(int idx)
+{
+    if (idx < 0 || idx >= s.store_app_count) return;
+    ESP_LOGI("shell", "mount_store_detail idx=%d id=%s",
+             idx, s.store_apps[idx].id);
+    s.page = SHELL_PAGE_STORE_DETAIL;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.store_detail_idx = idx;
+    s.store_detail_focus = 0;
+    s.store_status[0] = '\0';
+    s.text_input_widget = -1;
+    s.text_buf = NULL; s.text_cap = 0;
+    render_screen();
+}
+
+static void mount_store_url(void)
+{
+    ESP_LOGI("shell", "mount_store_url current='%s'", s.store_base_url);
+    s.page = SHELL_PAGE_STORE_URL;
+    s.focus_mode = FOCUS_VIEWPORT;
+    s.text_input_widget = 0;
+    s.text_buf = s.store_base_url;
+    s.text_cap = sizeof(s.store_base_url);
+    render_screen();
+}
+
+// Install the focused detail-screen app. Reuses the existing FW-034
+// sideload contract: pass `<base>/apps/<id>` as the URL, and the
+// sideloader will GET `<that>/.pageros/manifest.cbor`, decode, and
+// drop it under /sd/apps/<id>/manifest.cbor — desktop_refresh_tiles()
+// then picks it up automatically.
+static void store_action_install(void)
+{
+    if (s.store_detail_idx < 0
+            || s.store_detail_idx >= s.store_app_count) return;
+    if (!pageros_wifi_is_connected()) {
+        strncpy(s.store_status, "WI-FI OFF — SETTINGS → WI-FI",
+                sizeof(s.store_status) - 1);
+        s.store_status[sizeof(s.store_status) - 1] = '\0';
+        notif_announce("WI-FI OFF", PAGEROS_TOAST_WARN, 2000);
+        render_screen();
+        return;
+    }
+    esp_err_t sm = pageros_storage_init();
+    if (sm != ESP_OK) {
+        snprintf(s.store_status, sizeof(s.store_status),
+                 "SD MOUNT FAILED: %s", esp_err_to_name(sm));
+        notif_announce("INSTALL: SD ERROR", PAGEROS_TOAST_ERROR, 2500);
+        render_screen();
+        return;
+    }
+    const struct store_entry *e = &s.store_apps[s.store_detail_idx];
+    char url[256];
+    int n = snprintf(url, sizeof(url), "%s/apps/%s",
+                     s.store_base_url, e->id);
+    if (n <= 0 || n >= (int)sizeof(url)) {
+        strncpy(s.store_status, "URL TOO LONG",
+                sizeof(s.store_status) - 1);
+        render_screen();
+        return;
+    }
+
+    s.store_busy = true;
+    strncpy(s.store_status, "INSTALLING…",
+            sizeof(s.store_status) - 1);
+    s.store_status[sizeof(s.store_status) - 1] = '\0';
+    render_screen();
+
+    char installed_id[PAGEROS_SIDELOAD_MAX_APP_ID];
+    esp_err_t r = pageros_sideload_install_from_url(url, installed_id,
+                                                    sizeof(installed_id));
+    s.store_busy = false;
+    if (r == ESP_OK) {
+        snprintf(s.store_status, sizeof(s.store_status),
+                 "INSTALLED %.40s", installed_id);
+        notif_announce("APP INSTALLED", PAGEROS_TOAST_OK, 2500);
+    } else {
+        snprintf(s.store_status, sizeof(s.store_status),
+                 "INSTALL FAILED: %s", esp_err_to_name(r));
+        notif_announce("INSTALL FAILED", PAGEROS_TOAST_ERROR, 3000);
+    }
     render_screen();
 }
 
@@ -1598,6 +2157,7 @@ static void switch_to_builtin(const char *id)
     else if (strcmp(id, "builtin:nfc")    == 0) mount_nfc();
     else if (strcmp(id, "builtin:notif")  == 0) mount_notif();
     else if (strcmp(id, "builtin:quick")  == 0) mount_quick();
+    else if (strcmp(id, "builtin:store")  == 0) mount_store_home();
     else { ESP_LOGW("shell", "switch_to_builtin: unknown %s", id); return; }
 
     if (slot) s.vp_focus = slot->vp_focus;
@@ -1861,7 +2421,25 @@ static void viewport_advance_focus(int step)
     case SHELL_PAGE_NFC:
     case SHELL_PAGE_LOCK:
     case SHELL_PAGE_SET_PIN:
+    case SHELL_PAGE_STORE_URL:
         return;
+    case SHELL_PAGE_STORE_HOME: {
+        // Virtual row -1 is the "URL >" cog; rows 0..n-1 are apps.
+        int total = s.store_app_count + 1;
+        int cur = s.store_focus + 1;
+        cur = (cur + step + total) % total;
+        s.store_focus = cur - 1;
+        return;
+    }
+    case SHELL_PAGE_STORE_DETAIL: {
+        // Cycle between Install (+ Tip when present).
+        int n = 1;
+        if (s.store_detail_idx >= 0
+                && s.store_detail_idx < s.store_app_count
+                && s.store_apps[s.store_detail_idx].has_donate) n = 2;
+        s.store_detail_focus = (s.store_detail_focus + step + n) % n;
+        return;
+    }
     }
     if (n_stops == 0) return;
     int cur = 0;
@@ -2050,7 +2628,10 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
          s.page == SHELL_PAGE_NOTES_LIST || s.page == SHELL_PAGE_NOTES_EDIT ||
          s.page == SHELL_PAGE_SYSMON  || s.page == SHELL_PAGE_IDQR ||
          s.page == SHELL_PAGE_NFC     || s.page == SHELL_PAGE_NOTIF ||
-         s.page == SHELL_PAGE_QUICK);
+         s.page == SHELL_PAGE_QUICK   ||
+         s.page == SHELL_PAGE_STORE_HOME ||
+         s.page == SHELL_PAGE_STORE_DETAIL ||
+         s.page == SHELL_PAGE_STORE_URL);
 
     switch (ev->kind) {
     case PAGEROS_ROUTER_EVT_ENCODER: {
@@ -2195,6 +2776,51 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
                 render_screen();
                 return true;
             }
+            if (s.page == SHELL_PAGE_STORE_HOME) {
+                if (s.store_focus == -1) {
+                    mount_store_url();
+                } else if (s.store_focus >= 0
+                           && s.store_focus < s.store_app_count) {
+                    mount_store_detail(s.store_focus);
+                }
+                return true;
+            }
+            if (s.page == SHELL_PAGE_STORE_DETAIL) {
+                if (s.store_busy) return true;
+                int idx = s.store_detail_focus;
+                if (idx == 0) {
+                    store_action_install();
+                } else if (idx == 1
+                           && s.store_detail_idx >= 0
+                           && s.store_detail_idx < s.store_app_count
+                           && s.store_apps[s.store_detail_idx].has_donate) {
+                    // Tip: surface as a toast — the device doesn't have
+                    // a browser, so we just confirm the donate link
+                    // (it's published in the manifest for off-device use).
+                    pageros_toast("OPEN DONATE URL ON A PHONE",
+                                  PAGEROS_TOAST_INFO, 2500);
+                }
+                return true;
+            }
+            if (s.page == SHELL_PAGE_STORE_URL) {
+                // ENTER saves the URL and bounces back to the list.
+                if (s.store_base_url[0] == '\0') {
+                    strncpy(s.store_base_url, STORE_DEFAULT_URL,
+                            sizeof(s.store_base_url) - 1);
+                    s.store_base_url[sizeof(s.store_base_url) - 1] = '\0';
+                }
+                if (store_url_save(s.store_base_url) == ESP_OK) {
+                    notif_announce("MARKETPLACE URL SAVED",
+                                   PAGEROS_TOAST_OK, 2000);
+                } else {
+                    notif_announce("URL SAVE FAILED",
+                                   PAGEROS_TOAST_ERROR, 2500);
+                }
+                s.text_input_widget = -1;
+                s.text_buf = NULL; s.text_cap = 0;
+                mount_store_home();
+                return true;
+            }
             const pgr_cbor_value_t *fr = pageros_apprt_foreground_frame();
             char href_buf[96];
             const char *href = focused_href(fr, s.vp_focus.widget_index,
@@ -2234,7 +2860,17 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
             case SHELL_PAGE_IDQR:
             case SHELL_PAGE_NFC:
             case SHELL_PAGE_NOTES_LIST:
+            case SHELL_PAGE_STORE_HOME:
                 mount_desktop();
+                dirty = true;
+                break;
+            case SHELL_PAGE_STORE_DETAIL:
+            case SHELL_PAGE_STORE_URL:
+                // Drop the text-input binding before returning to a
+                // page that doesn't expect one.
+                s.text_input_widget = -1;
+                s.text_buf = NULL; s.text_cap = 0;
+                mount_store_home();
                 dirty = true;
                 break;
             case SHELL_PAGE_NOTES_EDIT:
@@ -2657,24 +3293,30 @@ void app_main(void)
         boot_log_add(BL_OK, "[OK] WI-FI STA INIT");
         boot_splash_render();
         char saved_ssid[33] = {0}, saved_psk[65] = {0};
-        if (pageros_wifi_creds_load(saved_ssid, sizeof(saved_ssid),
-                                    saved_psk, sizeof(saved_psk)) == ESP_OK
-                && saved_ssid[0]) {
-            ESP_LOGI(TAG, "Wi-Fi auto-connect to '%s'", saved_ssid);
-            boot_log_add(BL_INFO, "[..] WI-FI CONNECTING %s", saved_ssid);
-            boot_splash_render();
-            esp_err_t wc = pageros_wifi_connect(saved_ssid, saved_psk, 15000);
-            if (wc != ESP_OK) {
-                ESP_LOGW(TAG, "auto-connect failed: %s", esp_err_to_name(wc));
-                boot_log_add(BL_WARN, "[!!] WI-FI: %s", esp_err_to_name(wc));
-            } else {
-                boot_log_add(BL_OK, "[OK] WI-FI CONNECTED");
-            }
-            boot_splash_render();
-        } else {
-            boot_log_add(BL_INFO, "[..] WI-FI NO CREDS");
-            boot_splash_render();
+        esp_err_t cl = pageros_wifi_creds_load(saved_ssid, sizeof(saved_ssid),
+                                               saved_psk, sizeof(saved_psk));
+        if (cl != ESP_OK || saved_ssid[0] == '\0') {
+            // Dev-mode default credentials so the pager auto-joins
+            // without needing Settings → Wi-Fi on first boot. Persisted
+            // to NVS so subsequent boots just load them; the user can
+            // overwrite from Settings.
+            strncpy(saved_ssid, "internet",    sizeof(saved_ssid) - 1);
+            strncpy(saved_psk,  "Albert@0210", sizeof(saved_psk)  - 1);
+            pageros_wifi_creds_save(saved_ssid, saved_psk);
+            ESP_LOGW(TAG, "Wi-Fi: wrote dev-mode default creds (%s)",
+                     saved_ssid);
         }
+        ESP_LOGI(TAG, "Wi-Fi auto-connect to '%s'", saved_ssid);
+        boot_log_add(BL_INFO, "[..] WI-FI CONNECTING %s", saved_ssid);
+        boot_splash_render();
+        esp_err_t wc = pageros_wifi_connect(saved_ssid, saved_psk, 15000);
+        if (wc != ESP_OK) {
+            ESP_LOGW(TAG, "auto-connect failed: %s", esp_err_to_name(wc));
+            boot_log_add(BL_WARN, "[!!] WI-FI: %s", esp_err_to_name(wc));
+        } else {
+            boot_log_add(BL_OK, "[OK] WI-FI CONNECTED");
+        }
+        boot_splash_render();
     }
 
     // Audio bring-up (FW-013) — required for click/scroll UI sounds.
@@ -2692,6 +3334,7 @@ void app_main(void)
     pageros_apprt_init(NULL);
     pageros_shell_init();
     lock_load_pin();
+    store_url_load();
     boot_log_add(BL_OK, "[OK] FONTS + APPRT + SHELL");
     boot_splash_render();
 
