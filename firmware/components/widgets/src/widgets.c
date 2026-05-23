@@ -960,11 +960,18 @@ void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
                                                fg, icon_scale);
         }
 
-        // Number badge "1"-"9" — top-left of tile, on the accent palette.
+        // Number badge "1"-"9" overlaid on the icon's top-left corner with
+        // a black chip + accent border so it reads on any sprite.
         char badge[2] = { (char)('1' + i), '\0' };
-        pageros_fonts_draw_text_16(canvas, tx + 4, ty + 2, badge, -1,
-                                   focused ? pal->accent : pal->info,
-                                   tile_w - 8);
+        int badge_w = 12, badge_h = 12;
+        int bx = ix;          // align with the icon's left edge
+        int by = iy;          // align with the icon's top edge
+        pageros_widgets_fill_rect(canvas, bx, by, badge_w, badge_h, pal->bg);
+        pageros_widgets_outline_rect(canvas, bx, by, badge_w, badge_h,
+                                     focused ? pal->accent : pal->info);
+        pageros_fonts_draw_text(canvas, bx + 3, by + 2, badge, -1,
+                                focused ? pal->accent : pal->fg,
+                                badge_w);
 
         // Unread badge — small accent dot in the top-right.
         if (tiles[i].unread > 0) {

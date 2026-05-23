@@ -139,6 +139,10 @@ def main():
     # Painterly icons fill the frame already — skip the white-trim crop;
     # it confuses dark cyberpunk backgrounds. Just letterbox + resize.
     small = to_rect(img, tw, th, method)
+    # Gemini sometimes ignores "black background" and renders on white;
+    # key any near-white pixel to pure black so the icon sits cleanly on
+    # the tile's dark backdrop.
+    small = keyed_bg_to_black(small, threshold=230)
     suffix = f"{tw}x{th}_{method}"
     small.save(OUT_16 / f"{name}_{suffix}_raw.png")
     preview = small.resize((tw * 16, th * 16), Image.NEAREST)

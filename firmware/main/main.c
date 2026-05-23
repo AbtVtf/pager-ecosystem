@@ -671,14 +671,20 @@ static void render_desktop(pageros_fonts_canvas_t *canvas,
                                      &s.tiles[start], count,
                                      focus, vp_x, vp_y, vp_w, vp_h);
 
-    // Page indicator — small "p/N" in the bottom-right of the viewport.
+    // Page indicator — large "p/N" in the bottom-right of the viewport,
+    // accent-colored so over-rotation can't go unnoticed.
     if (pages > 1) {
         char pi[24];
         snprintf(pi, sizeof(pi), "%d/%d", page + 1, pages);
-        int pw = pageros_fonts_measure_text(pi, -1);
-        pageros_fonts_draw_text(canvas, vp_x + vp_w - pw - 4,
-                                vp_y + vp_h - 12, pi, -1,
-                                g_palette.dim, pw + 2);
+        int pw = pageros_fonts_measure_text_16(pi, -1);
+        pageros_widgets_fill_rect(canvas, vp_x + vp_w - pw - 12,
+                                  vp_y + vp_h - 22, pw + 8, 18, g_palette.bg);
+        pageros_widgets_outline_rect(canvas, vp_x + vp_w - pw - 12,
+                                     vp_y + vp_h - 22, pw + 8, 18,
+                                     g_palette.accent);
+        pageros_fonts_draw_text_16(canvas, vp_x + vp_w - pw - 8,
+                                   vp_y + vp_h - 20, pi, -1,
+                                   g_palette.accent, pw + 4);
     }
 
     // Light scanline overlay for the cyberpunk vibe — only in the
@@ -2401,19 +2407,26 @@ static void viewport_advance_focus(int step)
     case SHELL_PAGE_DESKTOP: {
         // Encoder = page navigation across the 3×3 grid. Jump by a full
         // page; preserve the in-page slot (clamped to the new page's range).
+        // Pages CLAMP (don't wrap) — over-rotation at the ends is a no-op
+        // so the user can't accidentally cycle past where they meant to stop.
         if (s.tile_count <= 0) return;
         int per_page = DESKTOP_PER_PAGE;
         int pages = (s.tile_count + per_page - 1) / per_page;
-        if (pages <= 1) return;  // single page — nothing to scroll
+        if (pages <= 1) return;
         int cur_page  = s.tile_index / per_page;
         int slot      = s.tile_index % per_page;
-        int new_page  = (cur_page + step + pages) % pages;
+        int new_page  = cur_page + step;
+        if (new_page < 0)        new_page = 0;
+        if (new_page > pages - 1) new_page = pages - 1;
+        if (new_page == cur_page) return;
         int max_slot  = (new_page == pages - 1)
                         ? (s.tile_count - new_page * per_page)
                         : per_page;
         if (slot >= max_slot) slot = max_slot - 1;
         if (slot < 0)         slot = 0;
         s.tile_index  = new_page * per_page + slot;
+        ESP_LOGI("shell", "desktop page → %d/%d (tile_index=%d)",
+                 new_page + 1, pages, s.tile_index);
         return;
     }
     case SHELL_PAGE_SETTINGS: {
@@ -2757,6 +2770,12 @@ static bool default_shell_handler(const pageros_router_event_t *ev, void *ctx)
             // Viewport activation.
             if (s.page == SHELL_PAGE_DESKTOP) {
                 if (s.tile_index >= 0 && s.tile_index < s.tile_count) {
+                    ESP_LOGI("shell",
+                             "desktop launch: tile_index=%d page=%d slot=%d id=%s",
+                             s.tile_index,
+                             s.tile_index / DESKTOP_PER_PAGE + 1,
+                             s.tile_index % DESKTOP_PER_PAGE + 1,
+                             s.tile_app_ids[s.tile_index]);
                     handle_button_href(s.tile_app_ids[s.tile_index]);
                     return true;
                 }
