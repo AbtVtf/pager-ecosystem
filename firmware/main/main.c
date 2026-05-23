@@ -51,6 +51,7 @@
 #include "pageros_sideload.h"
 #include "pageros_storage.h"
 #include "pageros_widgets.h"
+#include "pageros_app_icons.h"
 #include "pageros_xl9555.h"
 #include "selftest.h"
 
@@ -519,6 +520,7 @@ static void desktop_refresh_tiles(void)
         // Surface the unread count as a badge on the NOTIFS tile.
         s.tiles[s.tile_count].unread =
             (strcmp(builtin[i].href, "builtin:notif") == 0) ? s.notif_count : 0;
+        s.tiles[s.tile_count].icon_rgb565 = NULL;  // builtins keep the letter glyph
         s.tile_count++;
     }
 
@@ -577,6 +579,7 @@ static void desktop_refresh_tiles(void)
             s.tile_names[s.tile_count][sizeof(s.tile_names[0]) - 1] = '\0';
             s.tiles[s.tile_count].name   = s.tile_names[s.tile_count];
             s.tiles[s.tile_count].unread = 0;
+            s.tiles[s.tile_count].icon_rgb565 = pageros_app_icon_for(e->d_name);
             s.tile_count++;
         }
         closedir(d);

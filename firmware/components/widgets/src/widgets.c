@@ -916,17 +916,26 @@ void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
                                       1, b, border);
         }
 
-        // Icon glyph — first letter of the tile name, upper-cased,
-        // rendered at 2× the 16×16 font (= 32×32 chunky cyberpunk).
-        const char *name = tiles[i].name ? tiles[i].name : "?";
-        char ch = name[0];
-        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
-        if (ch == '\0') ch = '?';
+        // Icon: prefer a per-app 32×32 RGB565 sprite (see pageros_app_icons.h);
+        // fall back to a chunky first-letter glyph when none is registered.
         int ix = tx + (tile_w - icon_size) / 2;
         int iy = ty + (tile_h - icon_size) / 2;
         uint16_t fg = focused ? pal->fg : pal->info;
-        pageros_fonts_draw_glyph_scaled_16(canvas, ix, iy, (uint32_t)ch,
-                                           fg, icon_scale);
+        const uint16_t *sprite = tiles[i].icon_rgb565;
+        if (sprite) {
+            for (int j = 0; j < icon_size; j++) {
+                for (int k = 0; k < icon_size; k++) {
+                    pix(canvas, ix + k, iy + j, sprite[j * icon_size + k]);
+                }
+            }
+        } else {
+            const char *name = tiles[i].name ? tiles[i].name : "?";
+            char ch = name[0];
+            if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+            if (ch == '\0') ch = '?';
+            pageros_fonts_draw_glyph_scaled_16(canvas, ix, iy, (uint32_t)ch,
+                                               fg, icon_scale);
+        }
 
         // Unread badge: a small magenta dot in the top-right corner.
         if (tiles[i].unread > 0) {

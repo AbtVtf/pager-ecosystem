@@ -182,6 +182,9 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
 typedef struct {
     const char *name;       // displayed in 16x16
     int unread;             // shown as "[N]" badge if > 0
+    // Optional 32x32 RGB565 sprite. When non-NULL the renderer blits this
+    // in place of the first-letter glyph (see `pageros_app_icons.h`).
+    const uint16_t *icon_rgb565;
 } pageros_chrome_tile_t;
 
 void pageros_widgets_chrome_tile_grid(const pageros_fonts_canvas_t *canvas,
