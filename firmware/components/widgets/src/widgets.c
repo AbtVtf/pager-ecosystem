@@ -11,6 +11,17 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
+
+// Forward-decl for the per-element glitch — lives in the cyber_fx
+// component. We declare it here instead of pulling cyber_fx.h to avoid
+// a circular cmake dependency (cyber_fx already requires widgets).
+// Linker resolves the symbol at final link of the main image.
+extern void pageros_cyber_fx_paint_element_glitch(
+    const pageros_fonts_canvas_t *canvas,
+    const pageros_widgets_palette_t *pal,
+    int x, int y, int w, int h,
+    uint32_t seed) __attribute__((weak));
 
 // Image widget (FW-021) consumes the image_cache; declared weakly here
 // so the renderer compiles even on host builds that don't link it.
@@ -673,10 +684,11 @@ void pageros_widgets_chrome_topbar(const pageros_fonts_canvas_t *canvas,
     if (!canvas || !pal) return;
     int w = canvas->w;
     pageros_widgets_fill_rect(canvas, 0, 0, w, PAGEROS_CHROME_BAR_H, pal->bg);
-    // Thin underline in cyan to delimit the bar from the body.
+    // Double underline: cyan + thin accent — cyberpunk doubled rule.
     pageros_widgets_fill_rect(canvas, 0, PAGEROS_CHROME_BAR_H - 1, w, 1, pal->info);
+    pageros_widgets_fill_rect(canvas, 0, PAGEROS_CHROME_BAR_H - 3, w, 1, pal->accent);
 
-    // Left: HH:MM (or --:-- if unknown)
+    // Left: HH:MM with a leading animated "blink" dot.
     char clock[8];
     if (state && state->hh >= 0 && state->mm >= 0) {
         int hh = state->hh % 100;
@@ -685,20 +697,29 @@ void pageros_widgets_chrome_topbar(const pageros_fonts_canvas_t *canvas,
     } else {
         snprintf(clock, sizeof(clock), "--:--");
     }
-    pageros_fonts_draw_text(canvas, 4, 4, clock, -1, pal->info, 80);
+    // Animated REC● dot — blinks at 1Hz from the uptime
+    int64_t t_ms = (int64_t)(esp_timer_get_time() / 1000);
+    bool blink_on = ((t_ms / 500) & 1) == 0;
+    if (blink_on) {
+        pageros_widgets_fill_rect(canvas, 4, 5, 4, 4, pal->accent);
+    }
+    pageros_fonts_draw_text(canvas, 12, 4, clock, -1, pal->info, 80);
 
-    // Mid: PAGEROS title (always)
-    const char *title = "PAGEROS";
-    int title_w = pageros_fonts_measure_text(title, -1);
-    pageros_fonts_draw_text(canvas, (w - title_w) / 2, 4, title, -1,
+    // Mid: "[ PAGEROS // <random katakana-ish glyph> ]"
+    // The trailing glyph isn't a real ideogram (no CJK font in 8x8 set),
+    // it's just a shifting ASCII char that looks alien at this size.
+    const char *brand = "[ PAGEROS ]";
+    int title_w = pageros_fonts_measure_text(brand, -1);
+    pageros_fonts_draw_text(canvas, (w - title_w) / 2, 4, brand, -1,
                             pal->info, w);
 
-    // Right: identity hash
+    // Right: identity hash with a leading "▶" arrow.
     if (state && state->identity_short) {
-        int id_w = pageros_fonts_measure_text(state->identity_short, -1);
+        char buf[24];
+        snprintf(buf, sizeof(buf), "▶%s", state->identity_short);
+        int id_w = pageros_fonts_measure_text(buf, -1);
         pageros_fonts_draw_text(canvas, w - id_w - 4, 4,
-                                state->identity_short, -1,
-                                pal->dim, 200);
+                                buf, -1, pal->dim, 200);
     }
 }
 
@@ -776,16 +797,62 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
     int rail_w = PAGEROS_CHROME_RAIL_W;
     int rail_h = canvas->h - 2 * PAGEROS_CHROME_BAR_H;
     pageros_widgets_fill_rect(canvas, rail_x, rail_y, rail_w, rail_h, pal->bg);
-    // Vertical divider on the right edge.
-    pageros_widgets_fill_rect(canvas, rail_x + rail_w - 1, rail_y, 1, rail_h, pal->info);
 
-    // Foregrounded-app thumbnail at the top of the rail. Nearest-neighbour
-    // downsample the 96×48 source to 64×32 so it fits inside the 80-wide rail.
-    int hdr_h = 0;
+    // Animation tick from uptime — ~25 ticks/sec.
+    uint32_t t_ms  = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t tick  = t_ms / 40;
+
+    // Right divider — double rule: dim cyan inner + accent outer with
+    // 8-px tick marks for the "data port" vibe, plus a travelling-light
+    // pulse that walks down the divider once every ~3 s.
+    int div_x = rail_x + rail_w - 1;
+    pageros_widgets_fill_rect(canvas, div_x,     rail_y, 1, rail_h, pal->info);
+    pageros_widgets_fill_rect(canvas, div_x - 2, rail_y, 1, rail_h, pal->dim);
+    for (int ty = rail_y + 4; ty < rail_y + rail_h - 4; ty += 8) {
+        pageros_widgets_fill_rect(canvas, div_x - 4, ty, 3, 1, pal->dim);
+    }
+    int pulse_y = rail_y + (int)((tick * 4) % (uint32_t)rail_h);
+    for (int j = 0; j < 8; j++) {
+        int yy = pulse_y + j;
+        if (yy >= rail_y && yy < rail_y + rail_h) {
+            int alpha = (j < 4) ? j : (7 - j);
+            uint16_t c;
+            switch (alpha) {
+            case 0: c = pal->dim;    break;
+            case 1: c = pal->info;   break;
+            case 2: c = pal->info;   break;
+            case 3: c = pal->accent; break;
+            default: c = pal->dim;   break;
+            }
+            pix(canvas, div_x,     yy, c);
+            pix(canvas, div_x - 1, yy, c);
+        }
+    }
+
+    // ===== Header strip (top of rail) ===============================
+    int hdr_strip_h = 14;
+    pageros_widgets_fill_rect(canvas, rail_x, rail_y, rail_w - 3, 1,
+                              pal->accent);
+    pageros_widgets_fill_rect(canvas, rail_x, rail_y + hdr_strip_h - 1,
+                              rail_w - 3, 1, pal->info);
+    // Tag like "▶DECK//06" — slot capacity reads as data port count.
+    char hdr[24];
+    int slots = (rail->n_items > 0 ? rail->n_items : 0);
+    if (slots > 99) slots = 99;
+    snprintf(hdr, sizeof(hdr), "▶DECK%02d", slots);
+    int hw = pageros_fonts_measure_text(hdr, -1);
+    pageros_fonts_draw_text(canvas, rail_x + (rail_w - 4 - hw) / 2,
+                            rail_y + 3, hdr, -1, pal->info, rail_w);
+
+    // Foregrounded-app thumbnail under the header strip.
+    int hdr_h = hdr_strip_h;
     if (rail->fg_icon) {
         int dst_w = 64, dst_h = 32;
         int dx = rail_x + (rail_w - dst_w) / 2;
-        int dy = rail_y + 4;
+        int dy = rail_y + hdr_strip_h + 4;
+        // 1-px frame around the thumbnail (accent corners, dim sides).
+        pageros_widgets_outline_rect(canvas, dx - 2, dy - 2,
+                                     dst_w + 4, dst_h + 4, pal->dim);
         for (int j = 0; j < dst_h; j++) {
             int sy = j * 48 / dst_h;
             for (int k = 0; k < dst_w; k++) {
@@ -793,10 +860,17 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
                 pix(canvas, dx + k, dy + j, rail->fg_icon[sy * 96 + sx]);
             }
         }
-        // Thin underline to separate the thumbnail from the row list.
-        pageros_widgets_fill_rect(canvas, rail_x + 4, dy + dst_h + 3,
-                                  rail_w - 9, 1, pal->dim);
-        hdr_h = dst_h + 10;  // icon + paddings
+        // Corner ticks on the thumbnail frame.
+        for (int b = 0; b < 4; b++) {
+            pix(canvas, dx - 2 + b, dy - 2, pal->accent);
+            pix(canvas, dx - 2,     dy - 2 + b, pal->accent);
+            pix(canvas, dx + dst_w + 1 - b, dy + dst_h + 1, pal->accent);
+            pix(canvas, dx + dst_w + 1,     dy + dst_h + 1 - b, pal->accent);
+        }
+        // Underline to separate the thumbnail from the row list.
+        pageros_widgets_fill_rect(canvas, rail_x + 4, dy + dst_h + 5,
+                                  rail_w - 11, 1, pal->dim);
+        hdr_h = hdr_strip_h + dst_h + 12;
     }
 
     int n = 1 + (rail->n_items > 0 ? rail->n_items : 0);
@@ -808,11 +882,13 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
     int start_y = rail_y + hdr_h + (avail_h - total_h) / 2;
     if (start_y < rail_y + hdr_h + 4) start_y = rail_y + hdr_h + 4;
 
-    // In close-mode the whole rail tints red so the user can't miss it.
     uint16_t close_color = pal->error;
 
     for (int i = 0; i < n; i++) {
-        int row_y = start_y + i * row_h;
+        int row_y    = start_y + i * row_h;
+        int row_w    = rail_w - 8;          // inner rect width
+        int row_x    = rail_x + 4;
+        int inner_h  = row_h - 4;
         bool focused = (rail->focus_index == i);
         bool home_row = (i == 0);
 
@@ -824,16 +900,58 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
             border = pal->dim;
         }
 
+        // Always-on corner brackets so each row reads as a "slot",
+        // consistent with the tile-grid style.
+        int b = focused ? 6 : 4;
+        // top-left
+        for (int k = 0; k < b; k++) {
+            pix(canvas, row_x + k,         row_y,         border);
+            pix(canvas, row_x,             row_y + k,     border);
+        }
+        // top-right
+        for (int k = 0; k < b; k++) {
+            pix(canvas, row_x + row_w - 1 - k, row_y,         border);
+            pix(canvas, row_x + row_w - 1,     row_y + k,     border);
+        }
+        // bot-left
+        for (int k = 0; k < b; k++) {
+            pix(canvas, row_x + k,         row_y + inner_h - 1, border);
+            pix(canvas, row_x,             row_y + inner_h - 1 - k, border);
+        }
+        // bot-right
+        for (int k = 0; k < b; k++) {
+            pix(canvas, row_x + row_w - 1 - k, row_y + inner_h - 1, border);
+            pix(canvas, row_x + row_w - 1,     row_y + inner_h - 1 - k, border);
+        }
+
+        // Left-edge "slot bar" — animated accent if focused, dim cyan
+        // tick otherwise. Pulses brightness when rail_active.
         if (focused) {
-            uint16_t tint = border;
-            pageros_widgets_outline_rect(canvas, rail_x + 4, row_y,
-                                         rail_w - 10, row_h - 4, border);
-            pageros_widgets_fill_rect(canvas, rail_x + 2, row_y, 2, row_h - 4, tint);
+            // Thick 3-px bar that breathes via the tick.
+            int phase = (int)(tick % 20);
+            int bright_lvl = (phase < 10 ? phase : 20 - phase);
+            uint16_t bar_c = (bright_lvl > 5)
+                                ? border
+                                : ((bright_lvl > 2) ? pal->info : pal->dim);
+            pageros_widgets_fill_rect(canvas, rail_x + 1, row_y + 2,
+                                      3, inner_h - 4, bar_c);
+            // Travelling cyan light along the top edge of the focused row.
+            int sweep = (int)((tick * 3) % (uint32_t)(row_w + 14)) - 7;
+            for (int k = 0; k < 8; k++) {
+                int sx = row_x + sweep + k;
+                if (sx <= row_x + b || sx >= row_x + row_w - b) continue;
+                int a = (k < 4) ? k : (7 - k);
+                uint16_t c = (a >= 3) ? 0xFFFF : pal->info;
+                pix(canvas, sx, row_y, c);
+            }
+        } else {
+            // Subtle dim-cyan slot tick on the left.
+            pageros_widgets_fill_rect(canvas, rail_x + 1, row_y + 4,
+                                      1, inner_h - 8, pal->dim);
         }
 
         const char *label = home_row ? "HOME" : rail->items[i - 1];
         if (!label) label = "?";
-        // Strip our "builtin:" prefix so the rail shows app names, not paths.
         if (strncmp(label, "builtin:", 8) == 0) label += 8;
         char short_label[6];
         size_t L = strlen(label);
@@ -853,10 +971,46 @@ void pageros_widgets_chrome_rail(const pageros_fonts_canvas_t *canvas,
         int label_w = pageros_fonts_measure_text_16(short_label, -1);
         int label_x = rail_x + (rail_w - 4 - label_w) / 2;
         if (label_x < rail_x + 6) label_x = rail_x + 6;
-        int label_y = row_y + (row_h - 4 - 16) / 2;
+        int label_y = row_y + (inner_h - 16) / 2;
         pageros_fonts_draw_text_16(canvas, label_x, label_y,
                                    short_label, -1, label_color,
                                    rail_w - 10);
+
+        // Right-edge status dot — accent if focused, info if app is open,
+        // dim otherwise. Visible at x = row_w - 4 area.
+        uint16_t dot = focused ? border
+                               : (home_row ? pal->dim : pal->info);
+        int dot_x = row_x + row_w - 6;
+        int dot_y = row_y + inner_h / 2 - 1;
+        pageros_widgets_fill_rect(canvas, dot_x, dot_y, 3, 3, dot);
+
+        // Per-row glitch on the focused row only — seeded so different
+        // row positions glitch out of phase. Skipped in close-mode (the
+        // red tint already carries enough alarm).
+        if (focused && !rail->close_mode
+                && pageros_cyber_fx_paint_element_glitch) {
+            pageros_cyber_fx_paint_element_glitch(
+                canvas, pal,
+                row_x + 1, row_y + 1,
+                row_w - 2, inner_h - 2,
+                (uint32_t)i * 53u + 7u);
+        }
+    }
+
+    // Footer — slot capacity indicator. "[ n/MAX ]" small dim line at
+    // the bottom of the rail.
+    {
+        char foot[16];
+        snprintf(foot, sizeof(foot), "%d/%d", slots,
+                 PAGEROS_CHROME_RAIL_MAX_APPS);
+        int fw = pageros_fonts_measure_text(foot, -1);
+        // Bottom rule above the footer.
+        pageros_widgets_fill_rect(canvas, rail_x + 4,
+                                  rail_y + rail_h - 14, rail_w - 11, 1,
+                                  pal->dim);
+        pageros_fonts_draw_text(canvas, rail_x + (rail_w - 4 - fw) / 2,
+                                rail_y + rail_h - 11, foot, -1,
+                                pal->dim, rail_w);
     }
 
     // Close-mode badge at the bottom of the rail so the state is visible

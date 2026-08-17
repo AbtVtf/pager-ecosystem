@@ -15,6 +15,7 @@ dependencies = [
   "pyyaml>=6.0,<7",
   "fastapi>=0.110,<1",
   "dnspython>=2.4,<3",
+  "cbor2>=5.6,<7",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,24 @@
+{
+  "": [
+    {
+      "symbol": "AAPL",
+      "kind": "stock"
+    },
+    {
+      "symbol": "GOOGL",
+      "kind": "stock"
+    },
+    {
+      "symbol": "MSFT",
+      "kind": "stock"
+    },
+    {
+      "symbol": "BTC",
+      "kind": "crypto"
+    },
+    {
+      "symbol": "ETH",
+      "kind": "crypto"
+    }
+  ]
+}

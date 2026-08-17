@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import secrets
 
+import cbor2
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from ..manifest import Manifest, ManifestValidationError, validate_manifest
 from .admin_ui import render_admin_index
@@ -448,6 +449,59 @@ def _register_routes(app: FastAPI) -> None:
         except UnknownAppError as exc:
             raise _not_found(exc) from exc
         return AppRecord.from_entry(entry)
+
+    @app.get(
+        "/apps/{app_id}/.pageros/manifest.cbor",
+        tags=["apps"],
+        responses={
+            200: {
+                "content": {"application/cbor": {}},
+                "description": "Manifest encoded as a CBOR map.",
+            },
+            404: _ERROR_RESPONSES[404],
+        },
+        summary="Sideload-compatible CBOR manifest",
+        description=(
+            "Returns the stored manifest encoded as a CBOR map at the exact "
+            "subpath the on-device sideloader (FW-034) appends to a base URL. "
+            "Lets the firmware install button reuse `pageros_sideload_install_from_url` "
+            "by passing `<base>/apps/<id>` — the standard sideload contract."
+        ),
+    )
+    def get_app_manifest_cbor(
+        app_id: str = Path(pattern=_APP_ID_PATTERN, examples=["notes.mafu.dev"]),
+        registry: Registry = Depends(_get_registry),
+    ) -> Response:
+        try:
+            entry = registry.get(app_id)
+        except UnknownAppError as exc:
+            raise _not_found(exc) from exc
+        m = entry.manifest
+        # Build a CBOR map with all manifest fields. The on-device decoder
+        # (pgr_cbor) reads `id` to derive the install path; everything else
+        # is retained for future firmware use (icon caching, donate links).
+        payload: dict[str, object] = {
+            "id":              m.id,
+            "name":            m.name,
+            "description":     m.description,
+            "icon":            m.icon,
+            "url":             m.url,
+            "permissions":     list(m.permissions),
+            "lora_compatible": m.lora_compatible,
+            "multi_device":    m.multi_device,
+            "categories":      list(m.categories),
+            "version":         m.version,
+            "maintainer": {
+                "name":    m.maintainer.name,
+                "contact": m.maintainer.contact,
+            },
+        }
+        if m.pubkey is not None:
+            payload["pubkey"] = m.pubkey
+        if m.donate_url is not None:
+            payload["donate_url"] = m.donate_url
+        body = cbor2.dumps(payload)
+        return Response(content=body, media_type="application/cbor")
 
     @app.put(
         "/apps/{app_id}",

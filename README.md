@@ -28,4 +28,4 @@ Pre-alpha. Active development by an agent team coordinated via [Paperclip](https
 
 ## License
 
-TBD.
+Apache-2.0 — see [LICENSE](./LICENSE).

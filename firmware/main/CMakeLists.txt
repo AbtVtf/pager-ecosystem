@@ -14,21 +14,21 @@ idf_component_register(
         network
         display
         imu
-        apprt
-        shell
         widgets
         fonts
-        sideload
         cbor_codec
         i2c_bus
         xl9555
         power
         audio
+        cyber_fx
         nfc
+        agent
         nvs_flash
         app_update
         esp_hw_support
         esp_timer
         spi_flash
+        json
         log
 )
